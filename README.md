@@ -8,10 +8,19 @@ The package is built around a searchable icon browser window and a small runtime
 
 ## Installation
 
-Add to projects using Package Manager git url:  
-`https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2`   
-OR   
-`https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0`
+### Via Unity Package Manager (Git URL)
+
+In Unity: `Window → Package Manager → + → Add package from Git URL`
+
+Use:
+
+    https://github.com/williamrjackson/FontAwesomeUnity.git
+
+Optionally lock to a specific tag:
+
+    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2
+
+------------------------------------------------------------------------
 
 ## What it does
 
@@ -25,7 +34,7 @@ OR
 
 ---
 
-![Example](Documentation/images/example.png) 
+![Example](Documentation/images/Example.png) 
 
 ## Opening the browser
 
