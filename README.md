@@ -25,7 +25,7 @@ OR
 
 ---
 
-![Example](Documentation/images/Example.png) 
+![Example](Documentation/images/example.png) 
 
 ## Opening the browser
 
