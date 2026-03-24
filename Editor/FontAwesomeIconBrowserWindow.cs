@@ -18,6 +18,7 @@ namespace Wrj.FontAwesome
         private const float TileWidth = 92f;
         private const float TileHeight = 84f;
         private const string SecondaryLayerObjectName = "FA Secondary Layer";
+        private const int FontAssetGenerationRetryCount = 10;
 
         private const string JsonStringPropertyPattern = "\"{0}\"\\s*:\\s*\"(?<value>(?:\\\\.|[^\"\\\\])*)\"";
         private const string JsonFamilyStylePattern = "\"family\"\\s*:\\s*\"(?<family>(?:\\\\.|[^\"\\\\])*)\"\\s*,\\s*\"style\"\\s*:\\s*\"(?<style>(?:\\\\.|[^\"\\\\])*)\"";
@@ -888,8 +889,6 @@ namespace Wrj.FontAwesome
                 AssetDatabase.Refresh();
 
                 EditorUtility.DisplayProgressBar(WindowTitle, $"Generating {iconSet.DisplayName} TMP font assets...", 0.9f);
-                CreateInstalledFontAssets(iconSet);
-                AssetDatabase.Refresh();
 
                 string metadataPath = iconSet.GetInstalledMetadataPath();
                 if (!string.IsNullOrWhiteSpace(metadataPath))
@@ -897,6 +896,7 @@ namespace Wrj.FontAwesome
                     iconSet.SetMetadataPathOverride(metadataPath);
                 }
 
+                BeginInstalledFontAssetCreation(iconSet);
                 selectedFontAsset = null;
                 EnsureDefaultFontAsset();
                 UpdateActiveIconSet();
@@ -932,24 +932,90 @@ namespace Wrj.FontAwesome
             }
         }
 
-        private static void CreateInstalledFontAssets(IconSetDefinition iconSet)
+        private void BeginInstalledFontAssetCreation(IconSetDefinition iconSet)
         {
             if (iconSet == null)
             {
                 return;
             }
 
-            if (TMP_Settings.instance == null)
+            AssetDatabase.Refresh();
+
+            FontAssetCreationStatus creationStatus = CreateInstalledFontAssets(iconSet);
+            if (creationStatus == FontAssetCreationStatus.Completed)
             {
-                Debug.LogWarning($"Could not generate {iconSet.DisplayName} TMP font assets because TMP Essential Resources are not installed.");
+                OnInstalledFontAssetsGenerated();
                 return;
             }
+
+            ScheduleInstalledFontAssetCreationRetry(iconSet, FontAssetGenerationRetryCount);
+        }
+
+        private void ScheduleInstalledFontAssetCreationRetry(IconSetDefinition iconSet, int attemptsRemaining)
+        {
+            EditorApplication.delayCall += () => RetryInstalledFontAssetCreation(iconSet, attemptsRemaining);
+        }
+
+        private void RetryInstalledFontAssetCreation(IconSetDefinition iconSet, int attemptsRemaining)
+        {
+            if (iconSet == null)
+            {
+                return;
+            }
+
+            AssetDatabase.Refresh();
+
+            FontAssetCreationStatus creationStatus = CreateInstalledFontAssets(iconSet);
+            if (creationStatus == FontAssetCreationStatus.Completed)
+            {
+                OnInstalledFontAssetsGenerated();
+                return;
+            }
+
+            if (attemptsRemaining > 0)
+            {
+                ScheduleInstalledFontAssetCreationRetry(iconSet, attemptsRemaining - 1);
+                return;
+            }
+
+            Debug.LogWarning(
+                $"Delayed generation of {iconSet.DisplayName} TMP font assets did not complete before retrying timed out. " +
+                "Reopen the Font Awesome browser or reimport the installed fonts after TextMeshPro finishes initializing.");
+        }
+
+        private void OnInstalledFontAssetsGenerated()
+        {
+            AssetDatabase.Refresh();
+
+            selectedFontAsset = null;
+            EnsureDefaultFontAsset();
+            UpdateActiveIconSet();
+            EnsureIconsLoaded(true);
+            RebuildFilteredIcons();
+            Repaint();
+        }
+
+        private static FontAssetCreationStatus CreateInstalledFontAssets(IconSetDefinition iconSet)
+        {
+            if (iconSet == null)
+            {
+                return FontAssetCreationStatus.Completed;
+            }
+
+            if (TMP_Settings.instance == null)
+            {
+                return FontAssetCreationStatus.RetryRequired;
+            }
+
+            bool retryRequired = false;
+            bool savedAssets = false;
 
             foreach (string fontAssetPath in iconSet.GetFontSourceAssetPaths())
             {
                 Font sourceFont = AssetDatabase.LoadAssetAtPath<Font>(fontAssetPath);
                 if (sourceFont == null)
                 {
+                    retryRequired = true;
                     continue;
                 }
 
@@ -975,7 +1041,7 @@ namespace Wrj.FontAwesome
 
                 if (fontAsset == null)
                 {
-                    Debug.LogWarning($"TMP could not create a font asset for '{fontAssetPath}'.");
+                    retryRequired = true;
                     continue;
                 }
 
@@ -998,9 +1064,21 @@ namespace Wrj.FontAwesome
                 }
 
                 EditorUtility.SetDirty(fontAsset);
+                savedAssets = true;
             }
 
-            AssetDatabase.SaveAssets();
+            if (savedAssets)
+            {
+                AssetDatabase.SaveAssets();
+            }
+
+            return retryRequired ? FontAssetCreationStatus.RetryRequired : FontAssetCreationStatus.Completed;
+        }
+
+        private enum FontAssetCreationStatus
+        {
+            Completed,
+            RetryRequired
         }
 
         private static void CopyRequiredPackageContents(IconSetDefinition iconSet, string extractedRoot, string installRoot)
