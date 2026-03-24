@@ -34,7 +34,7 @@ Optionally lock to a specific tag:
 
 ---
 
-![Example](Documentation/images/Example.png) 
+![Example](Documentation/images/example.png) 
 
 ## Opening the browser
 
