@@ -1,0 +1,19 @@
+{
+    "name": "wrj.fontawesome.editor",
+    "rootNamespace": "Wrj",
+    "references": [
+        "Unity.TextMeshPro",
+        "com.wrj.fontawesome"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
