@@ -1,4 +1,4 @@
-# Font Awesome Icon Browser UPM Package
+# Font Awesome Icon Browser
 
 This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro objects.
 
@@ -73,7 +73,7 @@ This is useful if you keep Font Awesome in a custom folder or want to point at a
 
 ## Installing Font Awesome
 
-If Font Awesome content is not found, the window can offer a pinned installer for:
+If Font Awesome content is not found, this utility can automatically download a pinned installer for:
 
 `https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip`
 
@@ -116,20 +116,12 @@ Color behavior is intentionally slightly smarter:
 - the secondary alpha remains dimmer than the primary
 - if you explicitly change the secondary RGB so it no longer matches, RGB syncing stops and your custom secondary color is preserved
 
-## Notes and expectations
-
-- Font Awesome support depends on the selected font asset and the metadata you point at.
-- Free and Pro packages expose different icon/style sets.
-- Duotone support works best when the selected metadata and font asset come from the same Font Awesome package/version.
-- If a glyph is missing from a dynamic TMP font asset, the browser attempts to add it automatically.
-
 ## Package contents
 
 | Path | Purpose |
 |---|---|
 | `Editor/FontAwesomeIconBrowserWindow.cs` | The editor browser window and install/setup workflow. |
 | `Runtime/FontAwesomeDuotoneSync.cs` | Runtime/edit-mode helper that keeps duotone secondary layers synced to the primary text object. |
-| `Documentation/` | Package docs and images. |
 
 ## Typical usage examples
 
