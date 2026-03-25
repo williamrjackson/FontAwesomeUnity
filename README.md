@@ -1,6 +1,6 @@
 # Font Awesome Icon Browser
 
-This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro objects.
+This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro components.
 
 The package is built around a searchable icon browser window and a small runtime helper for duotone icons.
 
@@ -18,7 +18,7 @@ Use:
 
 Optionally pin to a specific version:
 
-    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2
+    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.3
 
 ------------------------------------------------------------------------
 ### Via OpenUPM Scoped Registry
@@ -64,10 +64,10 @@ Open:
 
 The browser will:
 
-- reuse the currently selected `TMP_Text` if one is selected
+- reuse a pre-selected `TMP_Text` if one is selected
 - otherwise create a new TMP object
 
-New UI text objects are created with:
+New UI TextMeshPro objects are created with:
 
 - `Auto Size` enabled
 - `Font Size Max = 500`
@@ -86,7 +86,7 @@ This is useful if you keep Font Awesome in a custom folder or want to point at a
 
 ## Installing Font Awesome
 
-If Font Awesome content is not found, this utility can automatically download a pinned installer for:
+If Font Awesome content is not found in the project Assets folder, this utility can automatically download a pinned installer for:
 
 `https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip`
 
@@ -94,7 +94,7 @@ The installer:
 
 - downloads the zip to a temp location
 - extracts only the needed files into `Assets/Fonts/fontawesome-free-7.2.0-desktop`
-- removes the temp zip afterward
+- cleans up temp zip afterward
 - generates TMP SDF assets from the installed OTF files
 
 Installed package content is intentionally trimmed to:
@@ -105,7 +105,7 @@ Installed package content is intentionally trimmed to:
 
 ## Duotone icons
 
-When the selected font asset is detected as a duotone font, the browser manages duotone behavior automatically behind the scenes.
+When the selected font asset is detected as a duotone font, the browser manages a layered glyph behavior automatically behind the scenes.
 
 For duotone icons it:
 
@@ -123,7 +123,7 @@ For duotone icons it:
 - spacing and wrapping
 - UI rect sizing
 
-Color behavior is intentionally slightly smarter:
+Color sync behavior is slightly smarter:
 
 - the secondary RGB follows the primary RGB by default
 - the secondary alpha remains dimmer than the primary
