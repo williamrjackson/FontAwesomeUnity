@@ -18,7 +18,7 @@ Use:
 
 Optionally pin to a specific version:
 
-    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.3
+    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.4
 
 ------------------------------------------------------------------------
 ### Via OpenUPM Scoped Registry
