@@ -10,21 +10,34 @@ The package is built around a searchable icon browser window and a small runtime
 
 ### Via Unity Package Manager (Git URL)
 
-In Unity: `Window → Package Manager → + → Add package from Git URL`
+Go to: `Window → Package Manager → + → Add package from Git URL`
 
 Use:
 
     https://github.com/williamrjackson/FontAwesomeUnity.git
 
-Optionally lock to a specific tag:
+Optionally pin to a specific version:
 
     https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2
 
 ------------------------------------------------------------------------
+### Via OpenUPM Scoped Registry
+
+Go to: `Edit → Project Settings → Package Manager
+`
+- Add an OpenUPM package registry:  
+   Name: `OpenUPM`   
+   URL: `https://package.openupm.com`  
+   Scope(s): `com.wrj` 
+![Project Settings](Documentation/images/ProjSettings.png) 
+- Go to: `Window → Package Manager`
+- Select `OpenUPM` under `My Registries`
+- Select the `Font Awesome Icon Browser` package and click `Install`
+![Package Manager](Documentation/images/PackageManager.png) 
 
 ## What it does
 
-- Shows a searchable grid of Font Awesome icons from `icons.json`
+- Presents a searchable grid of Font Awesome icons from `icons.json`
 - Lets you target an existing `TMP_Text` or create a new one
 - Supports both `TextMeshProUGUI` and world-space `TextMeshPro`
 - Can auto-install the pinned free Font Awesome desktop package
