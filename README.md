@@ -1,6 +1,6 @@
 # Font Awesome Icon Browser
 
-This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro objects.
+This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro components.
 
 The package is built around a searchable icon browser window and a small runtime helper for duotone icons.
 
