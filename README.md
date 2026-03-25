@@ -18,7 +18,7 @@ Use:
 
 Optionally pin to a specific version:
 
-    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2
+    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.3
 
 ------------------------------------------------------------------------
 
