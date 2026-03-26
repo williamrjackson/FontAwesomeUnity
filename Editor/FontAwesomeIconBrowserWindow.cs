@@ -901,12 +901,15 @@ namespace Wrj.FontAwesome
                 return;
             }
 
-            string installRoot = iconSet.GetInstallRootPath();
-            if (AssetDatabase.IsValidFolder(installRoot))
+            PackageInstallInfo installInfo = iconSet.ResolvePackageInstallInfo();
+            string installRoot = installInfo.InstallRootPath;
+            string existingInstallRoot = installInfo.ExistingInstallRootPath;
+            string replaceRoot = AssetDatabase.IsValidFolder(existingInstallRoot) ? existingInstallRoot : installRoot;
+            if (AssetDatabase.IsValidFolder(replaceRoot))
             {
                 bool overwriteConfirmed = EditorUtility.DisplayDialog(
                     $"Replace {iconSet.DisplayName}?",
-                    $"{iconSet.DisplayName} already exists at '{installRoot}'. Replace the existing files with a fresh download?",
+                    $"{iconSet.DisplayName} already exists at '{replaceRoot}'. Replace the existing files with a fresh download?",
                     "Replace",
                     "Cancel");
 
@@ -922,7 +925,7 @@ namespace Wrj.FontAwesome
             try
             {
                 EditorUtility.DisplayProgressBar(WindowTitle, $"Downloading {iconSet.DisplayName} package...", 0.15f);
-                DownloadFile(iconSet.PackageDownloadUrl, tempZipPath);
+                DownloadFile(installInfo.DownloadUrl, tempZipPath);
 
                 if (Directory.Exists(tempExtractPath))
                 {
@@ -936,6 +939,13 @@ namespace Wrj.FontAwesome
                 if (string.IsNullOrWhiteSpace(extractedRoot) || !Directory.Exists(extractedRoot))
                 {
                     throw new InvalidOperationException($"Could not find the extracted {iconSet.DisplayName} package root.");
+                }
+
+                if (AssetDatabase.IsValidFolder(existingInstallRoot) &&
+                    !string.Equals(existingInstallRoot, installRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    FileUtil.DeleteFileOrDirectory(existingInstallRoot);
+                    FileUtil.DeleteFileOrDirectory($"{existingInstallRoot}.meta");
                 }
 
                 if (AssetDatabase.IsValidFolder(installRoot))
@@ -953,7 +963,7 @@ namespace Wrj.FontAwesome
 
                 EditorUtility.DisplayProgressBar(WindowTitle, $"Generating {iconSet.DisplayName} TMP font assets...", 0.9f);
 
-                string metadataPath = iconSet.GetInstalledMetadataPath();
+                string metadataPath = installInfo.InstalledMetadataPath;
                 if (!string.IsNullOrWhiteSpace(metadataPath))
                 {
                     iconSet.SetMetadataPathOverride(metadataPath);
@@ -1140,6 +1150,26 @@ namespace Wrj.FontAwesome
         {
             Completed,
             RetryRequired
+        }
+
+        private sealed class PackageInstallInfo
+        {
+            public PackageInstallInfo(
+                string downloadUrl,
+                string installRootPath,
+                string installedMetadataPath,
+                string existingInstallRootPath = "")
+            {
+                DownloadUrl = downloadUrl ?? string.Empty;
+                InstallRootPath = installRootPath ?? string.Empty;
+                InstalledMetadataPath = installedMetadataPath ?? string.Empty;
+                ExistingInstallRootPath = existingInstallRootPath ?? string.Empty;
+            }
+
+            public string DownloadUrl { get; }
+            public string InstallRootPath { get; }
+            public string InstalledMetadataPath { get; }
+            public string ExistingInstallRootPath { get; }
         }
 
         private static void CopyRequiredPackageContents(IconSetDefinition iconSet, string extractedRoot, string installRoot)
@@ -1643,6 +1673,14 @@ namespace Wrj.FontAwesome
                 return DefaultIconsMetadataPath;
             }
 
+            public virtual PackageInstallInfo ResolvePackageInstallInfo()
+            {
+                return new PackageInstallInfo(
+                    PackageDownloadUrl,
+                    GetInstallRootPath(),
+                    GetInstalledMetadataPath());
+            }
+
             public virtual string FindExtractedPackageRoot(string extractedRootPath)
             {
                 return extractedRootPath;
@@ -1750,17 +1788,20 @@ namespace Wrj.FontAwesome
 
         private sealed class FontAwesomeIconSetDefinition : IconSetDefinition
         {
+            private const string FallbackFontAwesomeVersion = "7.2.0";
+            private const string FontAwesomeLatestReleaseUrl = "https://github.com/FortAwesome/Font-Awesome/releases/latest";
+            private const string FontAwesomePackageRootPattern = @"(^|/)fontawesome-free-[^/]+-desktop$";
             private const string FontAwesomeMetadataPath = "Assets/Fonts/fontawesome-free-7.2.0-desktop/metadata/icons.json";
             private const string FontAwesomeInstallRoot = "Assets/Fonts/fontawesome-free-7.2.0-desktop";
-            private const string FontAwesomeDownloadUrl = "https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip";
+            private const string FontAwesomeDownloadUrl = "https://github.com/FortAwesome/Font-Awesome/releases/download/7.2.0/fontawesome-free-7.2.0-desktop.zip";
 
             public override string DisplayName => "Font Awesome";
             public override string DefaultFontSearchFilter => "t:TMP_FontAsset Font Awesome";
             protected override string DefaultIconsMetadataPath => FontAwesomeMetadataPath;
             protected override string MetadataSearchFilter => "icons t:TextAsset";
             public override bool SupportsPackageInstall => true;
-            public override string InstallButtonLabel => "Download Font Awesome Free 7.2.0";
-            public override string InstallSummary => "Downloads the official free desktop package into Assets/Fonts.";
+            public override string InstallButtonLabel => "Download Latest Font Awesome Free";
+            public override string InstallSummary => "Downloads the latest official free desktop package into Assets/Fonts.";
             public override string PackageDownloadUrl => FontAwesomeDownloadUrl;
 
             public static FontAwesomeIconSetDefinition Create()
@@ -1783,6 +1824,16 @@ namespace Wrj.FontAwesome
             public override string GetInstalledMetadataPath()
             {
                 return FontAwesomeMetadataPath;
+            }
+
+            public override PackageInstallInfo ResolvePackageInstallInfo()
+            {
+                FontAwesomePackageInfo packageInfo = ResolveLatestPackageInfo();
+                return new PackageInstallInfo(
+                    packageInfo.DownloadUrl,
+                    packageInfo.InstallRootPath,
+                    packageInfo.MetadataPath,
+                    GetExistingInstallRootPath());
             }
 
             public override IEnumerable<string> GetRequiredPackagePaths()
@@ -1850,13 +1901,111 @@ namespace Wrj.FontAwesome
                 foreach (string directory in directories)
                 {
                     string normalizedPath = directory.Replace('\\', '/');
-                    if (normalizedPath.EndsWith("fontawesome-free-7.2.0-desktop", StringComparison.OrdinalIgnoreCase))
+                    if (Regex.IsMatch(normalizedPath, FontAwesomePackageRootPattern, RegexOptions.IgnoreCase))
                     {
                         return normalizedPath;
                     }
                 }
 
                 return extractedRootPath;
+            }
+
+            private FontAwesomePackageInfo ResolveLatestPackageInfo()
+            {
+                try
+                {
+                    string latestVersion = ResolveLatestVersionFromRedirect();
+                    if (!string.IsNullOrWhiteSpace(latestVersion))
+                    {
+                        return FontAwesomePackageInfo.Create(latestVersion);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"Could not resolve the latest Font Awesome release from GitHub. Falling back to {FallbackFontAwesomeVersion}. {exception.Message}");
+                }
+
+                return FontAwesomePackageInfo.Create(FallbackFontAwesomeVersion);
+            }
+
+            private static string ResolveLatestVersionFromRedirect()
+            {
+                using UnityWebRequest request = UnityWebRequest.Get(FontAwesomeLatestReleaseUrl);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.redirectLimit = 8;
+                request.SetRequestHeader("User-Agent", "FontAwesomeUnity");
+
+                UnityWebRequestAsyncOperation operation = request.SendWebRequest();
+                while (!operation.isDone)
+                {
+                }
+
+#if UNITY_2020_1_OR_NEWER
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    throw new InvalidOperationException($"Release lookup failed: {request.error}");
+                }
+#else
+                if (request.isHttpError || request.isNetworkError)
+                {
+                    throw new InvalidOperationException($"Release lookup failed: {request.error}");
+                }
+#endif
+
+                string redirectedUrl = request.url ?? string.Empty;
+                string tag = redirectedUrl.TrimEnd('/').Split('/').LastOrDefault();
+                if (string.IsNullOrWhiteSpace(tag))
+                {
+                    throw new InvalidOperationException("Release lookup did not return a tag.");
+                }
+
+                return tag.StartsWith("v", StringComparison.OrdinalIgnoreCase)
+                    ? tag.Substring(1)
+                    : tag;
+            }
+
+            private string GetExistingInstallRootPath()
+            {
+                string metadataPath = IconsMetadataPath.Replace('\\', '/');
+                string metadataDirectory = Path.GetDirectoryName(metadataPath)?.Replace('\\', '/');
+                string packageRoot = Path.GetDirectoryName(metadataDirectory ?? string.Empty)?.Replace('\\', '/');
+                return IsFontAwesomePackageRoot(packageRoot) ? packageRoot : string.Empty;
+            }
+
+            private static bool IsFontAwesomePackageRoot(string path)
+            {
+                return !string.IsNullOrWhiteSpace(path) &&
+                       Regex.IsMatch(path.Replace('\\', '/'), FontAwesomePackageRootPattern, RegexOptions.IgnoreCase);
+            }
+
+            private readonly struct FontAwesomePackageInfo
+            {
+                public FontAwesomePackageInfo(string version, string directoryName, string downloadUrl, string installRootPath, string metadataPath)
+                {
+                    Version = version;
+                    DirectoryName = directoryName;
+                    DownloadUrl = downloadUrl;
+                    InstallRootPath = installRootPath;
+                    MetadataPath = metadataPath;
+                }
+
+                public string Version { get; }
+                public string DirectoryName { get; }
+                public string DownloadUrl { get; }
+                public string InstallRootPath { get; }
+                public string MetadataPath { get; }
+
+                public static FontAwesomePackageInfo Create(string version)
+                {
+                    string normalizedVersion = string.IsNullOrWhiteSpace(version)
+                        ? FallbackFontAwesomeVersion
+                        : version.Trim().TrimStart('v', 'V');
+                    string directoryName = $"fontawesome-free-{normalizedVersion}-desktop";
+                    string installRoot = $"Assets/Fonts/{directoryName}";
+                    string downloadUrl = $"https://github.com/FortAwesome/Font-Awesome/releases/download/{normalizedVersion}/{directoryName}.zip";
+                    string metadataPath = $"{installRoot}/metadata/icons.json";
+                    return new FontAwesomePackageInfo(normalizedVersion, directoryName, downloadUrl, installRoot, metadataPath);
+                }
             }
 
             public override bool MatchesFontAsset(TMP_FontAsset fontAsset)

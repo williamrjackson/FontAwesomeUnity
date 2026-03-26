@@ -2,6 +2,8 @@
 
 This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro components.
 
+![Banner](Documentation/images/OpenUpmCover.png) 
+
 The package is built around a searchable icon browser window and a small runtime helper for duotone icons.
 
 ![Screenshot](Documentation/images/Screenshot.png) 
@@ -86,14 +88,12 @@ This is useful if you keep Font Awesome in a custom folder or want to point at a
 
 ## Installing Font Awesome
 
-If Font Awesome content is not found in the project Assets folder, this utility can automatically download a pinned installer for:
-
-`https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip`
+If Font Awesome content is not found in the project Assets folder, this utility can automatically identify and download the latest Font Awesome Free release. If it fails to find the latest it will fall back to `https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip`, which is the latest at time of release.
 
 The installer:
 
 - downloads the zip to a temp location
-- extracts only the needed files into `Assets/Fonts/fontawesome-free-7.2.0-desktop`
+- extracts only the needed files into `Assets/Fonts/fontawesome-free-{version}-desktop`
 - cleans up temp zip afterward
 - generates TMP SDF assets from the installed OTF files
 
