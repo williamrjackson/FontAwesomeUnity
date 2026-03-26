@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using TMPro;
@@ -26,6 +27,7 @@ namespace Wrj.FontAwesome
         private readonly List<FontAwesomeIconEntry> allIcons = new();
         private readonly List<FontAwesomeIconEntry> filteredIcons = new();
         private readonly List<IconSetDefinition> iconSetDefinitions = new();
+        private readonly HashSet<string> pendingAutoFontAssetGeneration = new();
 
         private TMP_FontAsset selectedFontAsset;
         private IconSetDefinition activeIconSet;
@@ -49,6 +51,7 @@ namespace Wrj.FontAwesome
         private void OnEnable()
         {
             EnsureIconSetDefinitions();
+            EnsureFontAssetsForConfiguredMetadata();
             EnsureDefaultFontAsset();
             UpdateActiveIconSet();
             duotoneMode = IsSelectedFontDuotone();
@@ -59,6 +62,7 @@ namespace Wrj.FontAwesome
         private void OnGUI()
         {
             EnsureIconSetDefinitions();
+            EnsureFontAssetsForConfiguredMetadata();
             EnsureDefaultFontAsset();
             UpdateActiveIconSet();
             EnsureIconsLoaded();
@@ -151,6 +155,10 @@ namespace Wrj.FontAwesome
             if (EditorGUI.EndChangeCheck())
             {
                 settingsIconSet.SetMetadataPathOverride(metadataPath);
+                EnsureFontAssetsForIconSet(settingsIconSet);
+                selectedFontAsset = null;
+                UpdateActiveIconSet();
+                EnsureDefaultFontAsset();
                 EnsureIconsLoaded(true);
                 RebuildFilteredIcons();
             }
@@ -160,6 +168,10 @@ namespace Wrj.FontAwesome
             {
                 if (settingsIconSet.TryAutoConfigureMetadataPath())
                 {
+                    EnsureFontAssetsForIconSet(settingsIconSet);
+                    selectedFontAsset = null;
+                    UpdateActiveIconSet();
+                    EnsureDefaultFontAsset();
                     EnsureIconsLoaded(true);
                     RebuildFilteredIcons();
                 }
@@ -168,6 +180,10 @@ namespace Wrj.FontAwesome
             if (GUILayout.Button("Reset"))
             {
                 settingsIconSet.ClearMetadataPathOverride();
+                EnsureFontAssetsForIconSet(settingsIconSet);
+                selectedFontAsset = null;
+                UpdateActiveIconSet();
+                EnsureDefaultFontAsset();
                 EnsureIconsLoaded(true);
                 RebuildFilteredIcons();
             }
@@ -342,6 +358,53 @@ namespace Wrj.FontAwesome
                     }
                 }
             }
+        }
+
+        private void EnsureFontAssetsForConfiguredMetadata()
+        {
+            foreach (IconSetDefinition iconSetDefinition in iconSetDefinitions)
+            {
+                EnsureFontAssetsForIconSet(iconSetDefinition);
+            }
+        }
+
+        private void EnsureFontAssetsForIconSet(IconSetDefinition iconSet)
+        {
+            if (iconSet == null || !iconSet.NeedsFontAssetGeneration())
+            {
+                return;
+            }
+
+            string generationKey = iconSet.GetFontAssetGenerationKey();
+            if (!string.IsNullOrWhiteSpace(generationKey) &&
+                pendingAutoFontAssetGeneration.Contains(generationKey))
+            {
+                return;
+            }
+
+            FontAssetCreationStatus creationStatus = CreateInstalledFontAssets(iconSet);
+            if (creationStatus == FontAssetCreationStatus.Completed)
+            {
+                if (!string.IsNullOrWhiteSpace(generationKey))
+                {
+                    pendingAutoFontAssetGeneration.Remove(generationKey);
+                }
+
+                AssetDatabase.Refresh();
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(generationKey))
+            {
+                return;
+            }
+
+            pendingAutoFontAssetGeneration.Add(generationKey);
+            EditorApplication.delayCall += () =>
+            {
+                pendingAutoFontAssetGeneration.Remove(generationKey);
+                EnsureFontAssetsForIconSet(iconSet);
+            };
         }
 
         private void EnsureIconsLoaded(bool forceReload = false)
@@ -1019,9 +1082,7 @@ namespace Wrj.FontAwesome
                     continue;
                 }
 
-                string directory = Path.GetDirectoryName(fontAssetPath)?.Replace('\\', '/') ?? "Assets";
-                string fontName = Path.GetFileNameWithoutExtension(fontAssetPath);
-                string sdfAssetPath = $"{directory}/{fontName} SDF.asset";
+                string sdfAssetPath = IconSetDefinition.GetSdfAssetPath(fontAssetPath);
 
                 TMP_FontAsset existingAsset = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(sdfAssetPath);
                 if (existingAsset != null)
@@ -1602,6 +1663,42 @@ namespace Wrj.FontAwesome
                 return AssetDatabase.LoadAssetAtPath<TextAsset>(IconsMetadataPath) != null;
             }
 
+            public virtual bool NeedsFontAssetGeneration()
+            {
+                if (AssetDatabase.LoadAssetAtPath<TextAsset>(IconsMetadataPath) == null)
+                {
+                    return false;
+                }
+
+                List<string> sourceFontAssetPaths = GetFontSourceAssetPaths().ToList();
+                if (sourceFontAssetPaths.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (string fontAssetPath in sourceFontAssetPaths)
+                {
+                    if (AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(GetSdfAssetPath(fontAssetPath)) != null)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            public virtual string GetFontAssetGenerationKey()
+            {
+                return $"{GetType().FullName}:{IconsMetadataPath}";
+            }
+
+            public static string GetSdfAssetPath(string fontAssetPath)
+            {
+                string directory = Path.GetDirectoryName(fontAssetPath)?.Replace('\\', '/') ?? "Assets";
+                string fontName = Path.GetFileNameWithoutExtension(fontAssetPath);
+                return $"{directory}/{fontName} SDF.asset";
+            }
+
             private string ResolveMetadataPath()
             {
                 string prefsKey = GetMetadataPrefsKey();
@@ -1814,6 +1911,13 @@ namespace Wrj.FontAwesome
                 {
                     family = "classic";
                     style = "regular";
+                    return true;
+                }
+
+                if (combinedName.Contains("light"))
+                {
+                    family = "classic";
+                    style = "light";
                     return true;
                 }
 

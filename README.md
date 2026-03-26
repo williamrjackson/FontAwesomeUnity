@@ -1,6 +1,6 @@
-# Font Awesome Icon Browser
+# Font Awesome Icon Browser UPM Package
 
-This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro components.
+This package adds a Unity editor workflow for browsing Font Awesome icons and inserting them into TextMeshPro objects.
 
 The package is built around a searchable icon browser window and a small runtime helper for duotone icons.
 
@@ -8,36 +8,14 @@ The package is built around a searchable icon browser window and a small runtime
 
 ## Installation
 
-### Via Unity Package Manager (Git URL)
-
-Go to: `Window → Package Manager → + → Add package from Git URL`
-
-Use:
-
-    https://github.com/williamrjackson/FontAwesomeUnity.git
-
-Optionally pin to a specific version:
-
-    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.4
-
-------------------------------------------------------------------------
-### Via OpenUPM Scoped Registry
-
-Go to: `Edit → Project Settings → Package Manager
-`
-- Add an OpenUPM package registry:  
-   Name: `OpenUPM`   
-   URL: `https://package.openupm.com`  
-   Scope(s): `com.wrj` 
-![Project Settings](Documentation/images/ProjSettings.png) 
-- Go to: `Window → Package Manager`
-- Select `OpenUPM` under `My Registries`
-- Select the `Font Awesome Icon Browser` package and click `Install`
-![Package Manager](Documentation/images/PackageManager.png) 
+Add to projects using Package Manager git url:  
+`https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2`   
+OR   
+`https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0`
 
 ## What it does
 
-- Presents a searchable grid of Font Awesome icons from `icons.json`
+- Shows a searchable grid of Font Awesome icons from `icons.json`
 - Lets you target an existing `TMP_Text` or create a new one
 - Supports both `TextMeshProUGUI` and world-space `TextMeshPro`
 - Can auto-install the pinned free Font Awesome desktop package
@@ -64,10 +42,10 @@ Open:
 
 The browser will:
 
-- reuse a pre-selected `TMP_Text` if one is selected
+- reuse the currently selected `TMP_Text` if one is selected
 - otherwise create a new TMP object
 
-New UI TextMeshPro objects are created with:
+New UI text objects are created with:
 
 - `Auto Size` enabled
 - `Font Size Max = 500`
@@ -86,7 +64,7 @@ This is useful if you keep Font Awesome in a custom folder or want to point at a
 
 ## Installing Font Awesome
 
-If Font Awesome content is not found in the project Assets folder, this utility can automatically download a pinned installer for:
+If Font Awesome content is not found, the window can offer a pinned installer for:
 
 `https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip`
 
@@ -94,7 +72,7 @@ The installer:
 
 - downloads the zip to a temp location
 - extracts only the needed files into `Assets/Fonts/fontawesome-free-7.2.0-desktop`
-- cleans up temp zip afterward
+- removes the temp zip afterward
 - generates TMP SDF assets from the installed OTF files
 
 Installed package content is intentionally trimmed to:
@@ -105,7 +83,7 @@ Installed package content is intentionally trimmed to:
 
 ## Duotone icons
 
-When the selected font asset is detected as a duotone font, the browser manages a layered glyph behavior automatically behind the scenes.
+When the selected font asset is detected as a duotone font, the browser manages duotone behavior automatically behind the scenes.
 
 For duotone icons it:
 
@@ -123,11 +101,18 @@ For duotone icons it:
 - spacing and wrapping
 - UI rect sizing
 
-Color sync behavior is slightly smarter:
+Color behavior is intentionally slightly smarter:
 
 - the secondary RGB follows the primary RGB by default
 - the secondary alpha remains dimmer than the primary
 - if you explicitly change the secondary RGB so it no longer matches, RGB syncing stops and your custom secondary color is preserved
+
+## Notes and expectations
+
+- Font Awesome support depends on the selected font asset and the metadata you point at.
+- Free and Pro packages expose different icon/style sets.
+- Duotone support works best when the selected metadata and font asset come from the same Font Awesome package/version.
+- If a glyph is missing from a dynamic TMP font asset, the browser attempts to add it automatically.
 
 ## Package contents
 
@@ -135,6 +120,7 @@ Color sync behavior is slightly smarter:
 |---|---|
 | `Editor/FontAwesomeIconBrowserWindow.cs` | The editor browser window and install/setup workflow. |
 | `Runtime/FontAwesomeDuotoneSync.cs` | Runtime/edit-mode helper that keeps duotone secondary layers synced to the primary text object. |
+| `Documentation/` | Package docs and images. |
 
 ## Typical usage examples
 
