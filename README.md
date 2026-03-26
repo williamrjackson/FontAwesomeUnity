@@ -9,7 +9,7 @@ The package is built around a searchable icon browser window and a small runtime
 ## Installation
 
 Add to projects using Package Manager git url:  
-`https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.2`   
+`https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.3`   
 OR   
 `https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0`
 
