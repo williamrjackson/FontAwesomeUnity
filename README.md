@@ -20,7 +20,7 @@ Use:
 
 Optionally pin to a specific version:
 
-    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.6
+    https://github.com/williamrjackson/FontAwesomeUnity.git#v1.0.7
 
 ------------------------------------------------------------------------
 ### Via OpenUPM Scoped Registry
