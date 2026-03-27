@@ -30,22 +30,21 @@ Go to: `Edit → Project Settings → Package Manager
 - Add an OpenUPM package registry:  
    Name: `OpenUPM`   
    URL: `https://package.openupm.com`  
-   Scope(s): `com.wrj` 
+   Scope(s): `com.wrj`    
 ![Project Settings](Documentation/images/ProjSettings.png) 
 - Go to: `Window → Package Manager`
 - Select `OpenUPM` under `My Registries`
-- Select the `Font Awesome Icon Browser` package and click `Install`
+- Select the `Font Awesome Icon Browser` package and click `Install`    
 ![Package Manager](Documentation/images/PackageManager.png) 
 
 ## What it does
 
-- Presents a searchable grid of Font Awesome icons from `icons.json`
+- Provides a searchable grid of Font Awesome icons from `icons.json`
 - Lets you target an existing `TMP_Text` or create a new one
 - Supports both `TextMeshProUGUI` and world-space `TextMeshPro`
-- Can auto-install the pinned free Font Awesome desktop package
-- Can auto-generate TMP SDF assets from the installed OTFs
-- Supports duotone icons by creating a secondary TMP child layer
-- Keeps duotone secondary layers synced through `FontAwesomeDuotoneSync`
+- Automatically download and install the latest free licensed Font Awesome desktop package
+- Automatically generates TextMeshPro compatible SDF assets from the installed OTFs
+- Supports duotone icons by creating a secondary sync'd TMP layer`
 
 ---
 
@@ -60,9 +59,8 @@ Open:
 ## Basic workflow
 
 1. Open the icon browser.
-2. Assign a Font Awesome `TMP_FontAsset` if one is not already selected.
-3. Search for an icon by name.
-4. Click an icon in the grid.
+2. Assign the desired Font Awesome `TMP_FontAsset`
+3. Search for an icon by name and click it's icon in the grid.
 
 The browser will:
 
@@ -81,21 +79,19 @@ The browser reads icon definitions from a Font Awesome `icons.json` file.
 By default it can:
 
 - auto-find a matching `icons.json` in the project
-- remember the chosen path
-- let you override the path manually
-
-This is useful if you keep Font Awesome in a custom folder or want to point at a Pro package.
+- Persist the path
+- Allow you to override the path manually (useful if you have Font Awesome in a custom asset directory or want to point to a Pro package).
 
 ## Installing Font Awesome
 
 If Font Awesome content is not found in the project Assets folder, this utility can automatically identify and download the latest Font Awesome Free release. If it fails to find the latest it will fall back to `https://use.fontawesome.com/releases/v7.2.0/fontawesome-free-7.2.0-desktop.zip`, which is the latest at time of release.
 
-The installer:
+The installation:
 
-- downloads the zip to a temp location
-- extracts only the needed files into `Assets/Fonts/fontawesome-free-{version}-desktop`
-- cleans up temp zip afterward
-- generates TMP SDF assets from the installed OTF files
+- downloads the zip file to a temp location
+- extracts only the required/useful files into `Assets/Fonts/fontawesome-free-{version}-desktop`
+- cleans up temp files when done
+- generates TextMeshPro SDF assets from the installed files
 
 Installed package content is intentionally trimmed to:
 
@@ -129,6 +125,8 @@ Color sync behavior is slightly smarter:
 - the secondary alpha remains dimmer than the primary
 - if you explicitly change the secondary RGB so it no longer matches, RGB syncing stops and your custom secondary color is preserved
 
+![Duotone Color Sync](Documentation/images/\DuoToneColorMgmt.gif)
+
 ## Package contents
 
 | Path | Purpose |
@@ -148,7 +146,7 @@ The selected TMP object is updated in place.
 
 ### New UI icon
 
-- Select a GameObject under a `Canvas`
+- Select a GameObject within a UI `Canvas` hierarchy
 - Click an icon
 
 The browser creates a new `TextMeshProUGUI` object with the icon already assigned.
