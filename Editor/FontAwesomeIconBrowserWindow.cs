@@ -17,7 +17,7 @@ namespace Wrj.FontAwesome
     {
         private const string WindowTitle = "Font Awesome Icon Browser";
         private const float TileWidth = 92f;
-        private const float TileHeight = 84f;
+        private const float TileHeight = 96f;
         private const string SecondaryLayerObjectName = "FA Secondary Layer";
         private const int FontAssetGenerationRetryCount = 10;
 
@@ -25,19 +25,21 @@ namespace Wrj.FontAwesome
         private const string JsonFamilyStylePattern = "\"family\"\\s*:\\s*\"(?<family>(?:\\\\.|[^\"\\\\])*)\"\\s*,\\s*\"style\"\\s*:\\s*\"(?<style>(?:\\\\.|[^\"\\\\])*)\"";
 
         private readonly List<FontAwesomeIconEntry> allIcons = new();
-        private readonly List<FontAwesomeIconEntry> filteredIcons = new();
+        private readonly List<FontAwesomeFilteredIconEntry> filteredIcons = new();
         private readonly List<IconSetDefinition> iconSetDefinitions = new();
         private readonly HashSet<string> pendingAutoFontAssetGeneration = new();
 
-        private TMP_FontAsset selectedFontAsset;
         private IconSetDefinition activeIconSet;
         private Vector2 scrollPosition;
         private string searchText = string.Empty;
         private GUIStyle iconGlyphStyle;
         private GUIStyle iconLabelStyle;
         private GUIStyle secondaryIconGlyphStyle;
+        private GUIStyle styleFilterButtonStyle;
         private bool iconsLoaded;
-        private bool duotoneMode;
+        private readonly Dictionary<string, bool> styleFilterStates = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<TMP_FontAsset>> fontAssetsByStyle = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> availableStyleKeys = new();
 
         [MenuItem("Tools/Font Awesome Icon Browser...")]
         private static void OpenWindow()
@@ -51,27 +53,32 @@ namespace Wrj.FontAwesome
         private void OnEnable()
         {
             EnsureIconSetDefinitions();
-            EnsureFontAssetsForConfiguredMetadata();
-            EnsureDefaultFontAsset();
             UpdateActiveIconSet();
-            duotoneMode = IsSelectedFontDuotone();
+            EnsureFontAssetsForConfiguredMetadata();
+            RefreshFontAssetsForActiveIconSet();
             EnsureIconsLoaded();
+            EnsureStyleFilters(true);
             RebuildFilteredIcons();
         }
 
         private void OnGUI()
         {
             EnsureIconSetDefinitions();
-            EnsureFontAssetsForConfiguredMetadata();
-            EnsureDefaultFontAsset();
             UpdateActiveIconSet();
+            EnsureFontAssetsForConfiguredMetadata();
+            RefreshFontAssetsForActiveIconSet();
             EnsureIconsLoaded();
+            EnsureStyleFilters();
             EnsureStyles();
 
             DrawToolbar();
             EditorGUILayout.Space(6f);
             DrawMetadataSettings();
             EditorGUILayout.Space(6f);
+            DrawStyleFilters();
+            EditorGUILayout.Space(6f);
+            DrawResultsSummary();
+            EditorGUILayout.Space(4f);
 
             if (!iconsLoaded)
             {
@@ -80,31 +87,30 @@ namespace Wrj.FontAwesome
                 return;
             }
 
-            if (selectedFontAsset == null)
+            if (availableStyleKeys.Count == 0)
             {
-                EditorGUILayout.HelpBox("Assign a supported icon TMP Font Asset to preview and place icons.", MessageType.Warning);
+                EditorGUILayout.HelpBox("No styles were discovered from the configured metadata.", MessageType.Warning);
                 return;
             }
 
             if (activeIconSet == null)
             {
                 EditorGUILayout.HelpBox(
-                    "The selected TMP font asset is not part of a registered icon set. Use a Font Awesome icon font, or add another IconSetDefinition to this window.",
+                    "No registered icon set is active. Configure the metadata path to continue.",
                     MessageType.Warning);
                 return;
             }
 
-            if (selectedFontAsset.atlasPopulationMode != AtlasPopulationMode.Dynamic &&
-                selectedFontAsset.atlasPopulationMode != AtlasPopulationMode.DynamicOS)
+            if (!HasAnyResolvedFontAssets())
             {
                 EditorGUILayout.HelpBox(
-                    $"This {activeIconSet.DisplayName} font asset is static. Matching icons are shown, but icons missing from the atlas will only render after you switch to a dynamic font asset or regenerate the atlas.",
-                    MessageType.Info);
+                    $"No matching {activeIconSet.DisplayName} TMP SDF assets were found for the discovered styles. You can still browse icons, but placing them requires generated SDF assets.",
+                    MessageType.Warning);
             }
 
             if (filteredIcons.Count == 0)
             {
-                EditorGUILayout.HelpBox("No icons matched the current search/font filter.", MessageType.Info);
+                EditorGUILayout.HelpBox("No icons matched the current search/style filters.", MessageType.Info);
                 return;
             }
 
@@ -116,27 +122,94 @@ namespace Wrj.FontAwesome
         private void DrawToolbar()
         {
             EditorGUI.BeginChangeCheck();
-            TMP_FontAsset newFontAsset = (TMP_FontAsset)EditorGUILayout.ObjectField(
-                "Font Asset",
-                selectedFontAsset,
-                typeof(TMP_FontAsset),
-                false);
-
-            if (EditorGUI.EndChangeCheck())
-            {
-                selectedFontAsset = newFontAsset;
-                duotoneMode = IsSelectedFontDuotone();
-                UpdateActiveIconSet();
-                EnsureIconsLoaded(true);
-                RebuildFilteredIcons();
-            }
-
-            EditorGUI.BeginChangeCheck();
             string newSearchText = EditorGUILayout.TextField("Search", searchText);
             if (EditorGUI.EndChangeCheck())
             {
                 searchText = newSearchText ?? string.Empty;
                 RebuildFilteredIcons();
+            }
+        }
+
+        private void DrawStyleFilters()
+        {
+            if (availableStyleKeys.Count == 0)
+            {
+                return;
+            }
+
+            EditorGUILayout.LabelField("Style Filters", EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("All", EditorStyles.miniButtonLeft, GUILayout.Width(56f)))
+            {
+                SetAllStyleFilters(true);
+            }
+
+            if (GUILayout.Button("None", EditorStyles.miniButtonMid, GUILayout.Width(56f)))
+            {
+                SetAllStyleFilters(false);
+            }
+
+            GUILayout.Space(8f);
+            DrawStyleFilterButtons();
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            string styleSummary = GetEnabledStyleSdfSummary();
+            if (!string.IsNullOrWhiteSpace(styleSummary))
+            {
+                EditorGUILayout.LabelField(styleSummary, EditorStyles.miniLabel);
+            }
+        }
+
+        private void DrawResultsSummary()
+        {
+            if (!iconsLoaded)
+            {
+                return;
+            }
+
+            int enabledStyleCount = availableStyleKeys.Count(styleKey => IsStyleEnabled(styleKey));
+            EditorGUILayout.LabelField($"Results: {filteredIcons.Count}   Styles On: {enabledStyleCount}/{availableStyleKeys.Count}", EditorStyles.miniLabel);
+        }
+
+        private void DrawStyleFilterButtons()
+        {
+            float availableWidth = Mathf.Max(position.width - 180f, 120f);
+            float currentRowWidth = 0f;
+            bool rowOpen = false;
+
+            foreach (string styleKey in availableStyleKeys)
+            {
+                string label = ToDisplayLabel(styleKey);
+                Vector2 size = styleFilterButtonStyle.CalcSize(new GUIContent(label));
+                float buttonWidth = Mathf.Max(56f, size.x + 12f);
+
+                if (!rowOpen || currentRowWidth + buttonWidth > availableWidth)
+                {
+                    if (rowOpen)
+                    {
+                        EditorGUILayout.EndHorizontal();
+                    }
+
+                    EditorGUILayout.BeginHorizontal();
+                    rowOpen = true;
+                    currentRowWidth = 0f;
+                }
+
+                bool isEnabled = styleFilterStates.TryGetValue(styleKey, out bool currentValue) && currentValue;
+                bool nextValue = GUILayout.Toggle(isEnabled, label, styleFilterButtonStyle, GUILayout.Width(buttonWidth));
+                if (nextValue != isEnabled)
+                {
+                    styleFilterStates[styleKey] = nextValue;
+                    RebuildFilteredIcons();
+                }
+
+                currentRowWidth += buttonWidth + 4f;
+            }
+
+            if (rowOpen)
+            {
+                EditorGUILayout.EndHorizontal();
             }
         }
 
@@ -156,10 +229,10 @@ namespace Wrj.FontAwesome
             {
                 settingsIconSet.SetMetadataPathOverride(metadataPath);
                 EnsureFontAssetsForIconSet(settingsIconSet);
-                selectedFontAsset = null;
                 UpdateActiveIconSet();
-                EnsureDefaultFontAsset();
+                RefreshFontAssetsForActiveIconSet();
                 EnsureIconsLoaded(true);
+                EnsureStyleFilters(true);
                 RebuildFilteredIcons();
             }
 
@@ -169,10 +242,10 @@ namespace Wrj.FontAwesome
                 if (settingsIconSet.TryAutoConfigureMetadataPath())
                 {
                     EnsureFontAssetsForIconSet(settingsIconSet);
-                    selectedFontAsset = null;
                     UpdateActiveIconSet();
-                    EnsureDefaultFontAsset();
+                    RefreshFontAssetsForActiveIconSet();
                     EnsureIconsLoaded(true);
+                    EnsureStyleFilters(true);
                     RebuildFilteredIcons();
                 }
             }
@@ -181,10 +254,10 @@ namespace Wrj.FontAwesome
             {
                 settingsIconSet.ClearMetadataPathOverride();
                 EnsureFontAssetsForIconSet(settingsIconSet);
-                selectedFontAsset = null;
                 UpdateActiveIconSet();
-                EnsureDefaultFontAsset();
+                RefreshFontAssetsForActiveIconSet();
                 EnsureIconsLoaded(true);
+                EnsureStyleFilters(true);
                 RebuildFilteredIcons();
             }
 
@@ -245,13 +318,16 @@ namespace Wrj.FontAwesome
             EditorGUILayout.EndScrollView();
         }
 
-        private void DrawIconButton(FontAwesomeIconEntry icon)
+        private void DrawIconButton(FontAwesomeFilteredIconEntry filteredIcon)
         {
+            FontAwesomeIconEntry icon = filteredIcon.Icon;
             Rect tileRect = GUILayoutUtility.GetRect(TileWidth, TileHeight, GUILayout.Width(TileWidth), GUILayout.Height(TileHeight));
             GUI.Box(tileRect, GUIContent.none);
             Rect buttonRect = new(tileRect.x + 4f, tileRect.y + 4f, tileRect.width - 8f, tileRect.height - 8f);
-            string tooltip = $"{icon.Name}\n{icon.Label}\nU+{icon.Unicode:X4}";
-            bool glyphAvailable = FontHasGlyph(selectedFontAsset, icon.Unicode);
+            TMP_FontAsset previewFontAsset = ResolveFontAssetForIcon(icon, null, filteredIcon.StyleKey);
+            Font previewFont = ResolvePreviewFont(filteredIcon, previewFontAsset);
+            string tooltip = $"{icon.Name}\n{icon.Label}\n{ToDisplayLabel(filteredIcon.StyleKey)}\nU+{icon.Unicode:X4}\n{GetSdfSummaryForStyle(filteredIcon.StyleKey)}";
+            bool glyphAvailable = FontHasGlyph(previewFontAsset, icon.Unicode);
             Event currentEvent = Event.current;
 
             // Color previousColor = GUI.color;
@@ -268,12 +344,19 @@ namespace Wrj.FontAwesome
             {
                 GUI.FocusControl(string.Empty);
                 GUIUtility.keyboardControl = 0;
-                ApplyIcon(icon);
+                ApplyIcon(filteredIcon);
                 currentEvent.Use();
             }
 
+            iconGlyphStyle.font = previewFont;
+            secondaryIconGlyphStyle.font = iconGlyphStyle.font;
+
             Rect glyphRect = new(buttonRect.x, buttonRect.y + 2f, buttonRect.width, 34f);
-            if (ShouldRenderAsDuotone(icon))
+            if (iconGlyphStyle.font == null)
+            {
+                GUI.Label(glyphRect, "?", iconGlyphStyle);
+            }
+            else if (ShouldRenderAsDuotone(icon, previewFontAsset))
             {
                 GUI.Label(glyphRect, icon.Glyph, iconGlyphStyle);
 
@@ -291,24 +374,44 @@ namespace Wrj.FontAwesome
             GUI.Label(nameRect, icon.Name, iconLabelStyle);
 
             Rect codeRect = new(buttonRect.x + 2f, buttonRect.y + 55f, buttonRect.width - 4f, 14f);
-            GUI.Label(codeRect, $"U+{icon.Unicode:X4}", iconLabelStyle);
+            GUI.Label(codeRect, ToDisplayLabel(filteredIcon.StyleKey), iconLabelStyle);
+
+            Rect sdfRect = new(buttonRect.x + 2f, buttonRect.y + 69f, buttonRect.width - 4f, 18f);
+            GUI.Label(sdfRect, GetSdfSummaryForStyle(filteredIcon.StyleKey), iconLabelStyle);
 
             // GUI.color = previousColor;
         }
 
         private void EnsureStyles()
         {
+            Color primaryTextColor = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.82f)
+                : new Color(0.08f, 0.08f, 0.08f, 0.92f);
+            Color primaryHoverColor = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 1f)
+                : new Color(0f, 0f, 0f, 1f);
+            Color secondaryTextColor = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.3f)
+                : new Color(0.08f, 0.08f, 0.08f, 0.35f);
+            Color secondaryHoverColor = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.45f)
+                : new Color(0.08f, 0.08f, 0.08f, 0.5f);
+            Color labelColor = EditorGUIUtility.isProSkin
+                ? new Color(0.86f, 0.86f, 0.86f, 0.95f)
+                : new Color(0.12f, 0.12f, 0.12f, 0.95f);
+
             if (iconGlyphStyle == null)
             {
                 iconGlyphStyle = new GUIStyle(EditorStyles.label)
                 {
                     alignment = TextAnchor.MiddleCenter,
                     fontSize = 24,
-                    clipping = TextClipping.Clip,
-                    normal = { textColor = new Color(1f, 1f, 1f, 0.75f) },
-                    hover = { textColor = new Color(1f, 1f, 1f, 1f) }
+                    clipping = TextClipping.Clip
                 };
             }
+
+            iconGlyphStyle.normal.textColor = primaryTextColor;
+            iconGlyphStyle.hover.textColor = primaryHoverColor;
 
             if (iconLabelStyle == null)
             {
@@ -320,43 +423,32 @@ namespace Wrj.FontAwesome
                 };
             }
 
+            iconLabelStyle.normal.textColor = labelColor;
+            iconLabelStyle.hover.textColor = labelColor;
+
             if (secondaryIconGlyphStyle == null)
             {
                 secondaryIconGlyphStyle = new GUIStyle(EditorStyles.label)
                 {
                     alignment = TextAnchor.MiddleCenter,
                     fontSize = 24,
-                    clipping = TextClipping.Clip,
-                    normal = { textColor = new Color(1f, 1f, 1f, 0.25f) },
-                    hover = { textColor = new Color(1f, 1f, 1f, 0.35f) }
+                    clipping = TextClipping.Clip
                 };
             }
 
-            iconGlyphStyle.font = selectedFontAsset != null ? selectedFontAsset.sourceFontFile : null;
-            secondaryIconGlyphStyle.font = iconGlyphStyle.font;
-        }
+            secondaryIconGlyphStyle.normal.textColor = secondaryTextColor;
+            secondaryIconGlyphStyle.hover.textColor = secondaryHoverColor;
 
-        private void EnsureDefaultFontAsset()
-        {
-            if (selectedFontAsset != null)
+            if (styleFilterButtonStyle == null)
             {
-                return;
-            }
-
-            foreach (IconSetDefinition iconSetDefinition in iconSetDefinitions)
-            {
-                string[] guids = AssetDatabase.FindAssets(iconSetDefinition.DefaultFontSearchFilter);
-                foreach (string guid in guids)
+                styleFilterButtonStyle = new GUIStyle(EditorStyles.miniButton)
                 {
-                    string path = AssetDatabase.GUIDToAssetPath(guid);
-                    TMP_FontAsset fontAsset = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(path);
-                    if (fontAsset != null && iconSetDefinition.MatchesFontAsset(fontAsset))
-                    {
-                        selectedFontAsset = fontAsset;
-                        activeIconSet = iconSetDefinition;
-                        return;
-                    }
-                }
+                    alignment = TextAnchor.MiddleCenter,
+                    fontStyle = FontStyle.Bold,
+                    fixedHeight = 20f,
+                    padding = new RectOffset(8, 8, 3, 3),
+                    margin = new RectOffset(2, 2, 1, 1)
+                };
             }
         }
 
@@ -433,6 +525,58 @@ namespace Wrj.FontAwesome
             iconsLoaded = allIcons.Count > 0;
         }
 
+        private void EnsureStyleFilters(bool forceReset = false)
+        {
+            if (!iconsLoaded)
+            {
+                availableStyleKeys.Clear();
+                if (forceReset)
+                {
+                    styleFilterStates.Clear();
+                }
+
+                return;
+            }
+
+            HashSet<string> discoveredStyleKeys = new(StringComparer.OrdinalIgnoreCase);
+            foreach (FontAwesomeIconEntry icon in allIcons)
+            {
+                foreach (string styleKey in icon.GetStyleKeys())
+                {
+                    discoveredStyleKeys.Add(styleKey);
+                }
+            }
+
+            List<string> orderedStyleKeys = discoveredStyleKeys
+                .OrderBy(GetStyleSortOrder)
+                .ThenBy(ToDisplayLabel, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            availableStyleKeys.Clear();
+            availableStyleKeys.AddRange(orderedStyleKeys);
+
+            if (forceReset)
+            {
+                styleFilterStates.Clear();
+            }
+
+            foreach (string styleKey in orderedStyleKeys)
+            {
+                if (!styleFilterStates.ContainsKey(styleKey))
+                {
+                    styleFilterStates[styleKey] = true;
+                }
+            }
+
+            List<string> staleKeys = styleFilterStates.Keys
+                .Where(key => !discoveredStyleKeys.Contains(key))
+                .ToList();
+            foreach (string staleKey in staleKeys)
+            {
+                styleFilterStates.Remove(staleKey);
+            }
+        }
+
         private void RebuildFilteredIcons()
         {
             filteredIcons.Clear();
@@ -444,19 +588,20 @@ namespace Wrj.FontAwesome
 
             string query = (searchText ?? string.Empty).Trim();
             bool hasQuery = !string.IsNullOrWhiteSpace(query);
+            bool hasEnabledStyles = availableStyleKeys.Any(styleKey => IsStyleEnabled(styleKey));
+
+            if (!hasEnabledStyles && availableStyleKeys.Count > 0)
+            {
+                foreach (string styleKey in availableStyleKeys)
+                {
+                    styleFilterStates[styleKey] = true;
+                }
+
+                hasEnabledStyles = true;
+            }
 
             foreach (FontAwesomeIconEntry icon in allIcons)
             {
-                if (!IconMatchesSelectedFont(icon))
-                {
-                    continue;
-                }
-
-                if (duotoneMode && IsSelectedFontDuotone() && !icon.SupportsDuotone)
-                {
-                    continue;
-                }
-
                 if (hasQuery &&
                     icon.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0 &&
                     icon.Label.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0)
@@ -464,22 +609,41 @@ namespace Wrj.FontAwesome
                     continue;
                 }
 
-                filteredIcons.Add(icon);
+                foreach (string styleKey in availableStyleKeys)
+                {
+                    if (!IsStyleEnabled(styleKey) || !icon.SupportsStyleKey(styleKey))
+                    {
+                        continue;
+                    }
+
+                    filteredIcons.Add(new FontAwesomeFilteredIconEntry(icon, styleKey));
+                }
             }
 
             scrollPosition = Vector2.zero;
             Repaint();
         }
 
-        private void ApplyIcon(FontAwesomeIconEntry icon)
+        private void ApplyIcon(FontAwesomeFilteredIconEntry filteredIcon)
         {
-            if (ShouldRenderAsDuotone(icon))
+            FontAwesomeIconEntry icon = filteredIcon.Icon;
+            TMP_Text targetText = GetSelectedTextComponent();
+            TMP_FontAsset resolvedFontAsset = ResolveFontAssetForIcon(icon, targetText, filteredIcon.StyleKey);
+            if (resolvedFontAsset == null)
             {
-                ApplyDuotoneIcon(icon);
+                EditorUtility.DisplayDialog(
+                    WindowTitle,
+                    $"No TMP SDF asset was found for the {ToDisplayLabel(filteredIcon.StyleKey)} version of '{icon.DisplayName}'. Generate or import that SDF asset first.",
+                    "OK");
                 return;
             }
 
-            TMP_Text targetText = GetSelectedTextComponent();
+            if (ShouldRenderAsDuotone(icon, resolvedFontAsset))
+            {
+                ApplyDuotoneIcon(icon, targetText, resolvedFontAsset);
+                return;
+            }
+
             bool createdNewObject = targetText == null;
             if (targetText == null)
             {
@@ -494,8 +658,8 @@ namespace Wrj.FontAwesome
             bool shouldRenameObject = createdNewObject || ShouldRenameAutoNamedObject(targetText);
 
             Undo.RecordObject(targetText, "Assign Font Awesome Icon");
-            EnsureGlyphAvailable(selectedFontAsset, icon);
-            targetText.font = selectedFontAsset;
+            EnsureGlyphAvailable(resolvedFontAsset, icon);
+            targetText.font = resolvedFontAsset;
             targetText.text = icon.Glyph;
             DisableDuotoneSync(targetText);
             if (shouldRenameObject)
@@ -527,9 +691,8 @@ namespace Wrj.FontAwesome
             EditorGUIUtility.PingObject(targetText.gameObject);
         }
 
-        private void ApplyDuotoneIcon(FontAwesomeIconEntry icon)
+        private void ApplyDuotoneIcon(FontAwesomeIconEntry icon, TMP_Text primaryText, TMP_FontAsset fontAsset)
         {
-            TMP_Text primaryText = GetSelectedTextComponent();
             TMP_Text secondaryText;
             bool createdNewObject = primaryText == null;
 
@@ -551,18 +714,18 @@ namespace Wrj.FontAwesome
 
             bool shouldRenameObject = createdNewObject || ShouldRenameAutoNamedObject(primaryText);
 
-            EnsureGlyphAvailable(selectedFontAsset, icon);
+            EnsureGlyphAvailable(fontAsset, icon);
             if (icon.HasSecondaryGlyph)
             {
-                EnsureGlyphAvailable(selectedFontAsset, icon.SecondaryUnicode.Value);
+                EnsureGlyphAvailable(fontAsset, icon.SecondaryUnicode.Value);
             }
 
             Undo.RecordObject(primaryText, "Assign Font Awesome Duotone Icon");
             Undo.RecordObject(secondaryText, "Assign Font Awesome Duotone Icon");
 
-            primaryText.font = selectedFontAsset;
+            primaryText.font = fontAsset;
             primaryText.text = icon.Glyph;
-            secondaryText.font = selectedFontAsset;
+            secondaryText.font = fontAsset;
             secondaryText.text = icon.SecondaryGlyph;
 
             if (shouldRenameObject)
@@ -580,19 +743,19 @@ namespace Wrj.FontAwesome
             EditorGUIUtility.PingObject(primaryText.gameObject);
         }
 
-        private void EnsureGlyphAvailable(TMP_FontAsset selectedFontAsset, uint value)
+        private void EnsureGlyphAvailable(TMP_FontAsset fontAsset, uint value)
         {
-            if (selectedFontAsset == null || FontHasGlyph(selectedFontAsset, value))
+            if (fontAsset == null || FontHasGlyph(fontAsset, value))
             {
                 return;
             }
 
-            if (selectedFontAsset.atlasPopulationMode == AtlasPopulationMode.Dynamic ||
-                selectedFontAsset.atlasPopulationMode == AtlasPopulationMode.DynamicOS)
+            if (fontAsset.atlasPopulationMode == AtlasPopulationMode.Dynamic ||
+                fontAsset.atlasPopulationMode == AtlasPopulationMode.DynamicOS)
             {
                 string glyph = char.ConvertFromUtf32((int)value);
-                selectedFontAsset.TryAddCharacters(glyph, out string _);
-                EditorUtility.SetDirty(selectedFontAsset);
+                fontAsset.TryAddCharacters(glyph, out string _);
+                EditorUtility.SetDirty(fontAsset);
             }
         }
 
@@ -727,42 +890,45 @@ namespace Wrj.FontAwesome
             EditorUtility.SetDirty(sync);
         }
 
-        private bool IconMatchesSelectedFont(FontAwesomeIconEntry icon)
+        private bool IconMatchesEnabledStyles(FontAwesomeIconEntry icon)
         {
-            if (selectedFontAsset == null)
-            {
-                return true;
-            }
-
-            if (activeIconSet == null)
+            if (availableStyleKeys.Count == 0)
             {
                 return false;
             }
 
-            if (!activeIconSet.TryGetFamilyStyle(selectedFontAsset, out string family, out string style))
+            foreach (string styleKey in availableStyleKeys)
             {
-                return true;
+                if (!styleFilterStates.TryGetValue(styleKey, out bool isEnabled) || !isEnabled)
+                {
+                    continue;
+                }
+
+                if (icon.SupportsStyleKey(styleKey))
+                {
+                    return true;
+                }
             }
 
-            return icon.Supports(family, style);
+            return false;
         }
 
-        private bool CanUseDuotoneMode()
+        private bool HasAnyResolvedFontAssets()
         {
-            return selectedFontAsset != null && IsSelectedFontDuotone();
+            return fontAssetsByStyle.Values.Any(fontAssets => fontAssets.Count > 0);
         }
 
-        private bool IsSelectedFontDuotone()
+        private bool IsDuotoneFontAsset(TMP_FontAsset fontAsset)
         {
             return activeIconSet != null &&
-                   selectedFontAsset != null &&
-                   activeIconSet.TryGetFamilyStyle(selectedFontAsset, out _, out string style) &&
+                   fontAsset != null &&
+                   activeIconSet.TryGetFamilyStyle(fontAsset, out _, out string style) &&
                    string.Equals(style, "duotone", StringComparison.OrdinalIgnoreCase);
         }
 
-        private bool ShouldRenderAsDuotone(FontAwesomeIconEntry icon)
+        private bool ShouldRenderAsDuotone(FontAwesomeIconEntry icon, TMP_FontAsset fontAsset)
         {
-            return duotoneMode && IsSelectedFontDuotone() && icon.HasSecondaryGlyph;
+            return fontAsset != null && IsDuotoneFontAsset(fontAsset) && icon.HasSecondaryGlyph;
         }
 
         private void ConfigureTextLayer(TMP_Text targetText, bool createdNewObject, float alpha)
@@ -822,7 +988,8 @@ namespace Wrj.FontAwesome
             }
 
             string currentFontName = targetText.font != null ? targetText.font.name : string.Empty;
-            string selectedFontName = selectedFontAsset != null ? selectedFontAsset.name : string.Empty;
+            TMP_FontAsset resolvedFontAsset = ResolveFontAssetForIcon(previousIcon, targetText);
+            string selectedFontName = resolvedFontAsset != null ? resolvedFontAsset.name : string.Empty;
             if (string.Equals(currentName, $"{currentFontName} {previousIcon.Name}", StringComparison.Ordinal) ||
                 string.Equals(currentName, $"{selectedFontName} {previousIcon.Name}", StringComparison.Ordinal))
             {
@@ -862,18 +1029,7 @@ namespace Wrj.FontAwesome
 
         private void UpdateActiveIconSet()
         {
-            IconSetDefinition matchedIconSet = null;
-            if (selectedFontAsset != null)
-            {
-                foreach (IconSetDefinition iconSetDefinition in iconSetDefinitions)
-                {
-                    if (iconSetDefinition.MatchesFontAsset(selectedFontAsset))
-                    {
-                        matchedIconSet = iconSetDefinition;
-                        break;
-                    }
-                }
-            }
+            IconSetDefinition matchedIconSet = GetPreferredSettingsIconSet();
 
             if (!ReferenceEquals(activeIconSet, matchedIconSet))
             {
@@ -881,6 +1037,9 @@ namespace Wrj.FontAwesome
                 iconsLoaded = false;
                 allIcons.Clear();
                 filteredIcons.Clear();
+                styleFilterStates.Clear();
+                availableStyleKeys.Clear();
+                fontAssetsByStyle.Clear();
             }
         }
 
@@ -970,10 +1129,10 @@ namespace Wrj.FontAwesome
                 }
 
                 BeginInstalledFontAssetCreation(iconSet);
-                selectedFontAsset = null;
-                EnsureDefaultFontAsset();
                 UpdateActiveIconSet();
+                RefreshFontAssetsForActiveIconSet();
                 EnsureIconsLoaded(true);
+                EnsureStyleFilters(true);
                 RebuildFilteredIcons();
 
                 EditorUtility.DisplayDialog(
@@ -1060,10 +1219,10 @@ namespace Wrj.FontAwesome
         {
             AssetDatabase.Refresh();
 
-            selectedFontAsset = null;
-            EnsureDefaultFontAsset();
             UpdateActiveIconSet();
+            RefreshFontAssetsForActiveIconSet();
             EnsureIconsLoaded(true);
+            EnsureStyleFilters(true);
             RebuildFilteredIcons();
             Repaint();
         }
@@ -1082,6 +1241,7 @@ namespace Wrj.FontAwesome
 
             bool retryRequired = false;
             bool savedAssets = false;
+            List<FontAwesomeIconEntry> iconEntries = LoadIconEntries(iconSet);
 
             foreach (string fontAssetPath in iconSet.GetFontSourceAssetPaths())
             {
@@ -1108,7 +1268,7 @@ namespace Wrj.FontAwesome
                     1024,
                     1024,
                     AtlasPopulationMode.Dynamic,
-                    true);
+                    false);
 
                 if (fontAsset == null)
                 {
@@ -1116,6 +1276,8 @@ namespace Wrj.FontAwesome
                     continue;
                 }
 
+                PopulateFontAssetWithIcons(fontAsset, iconSet, iconEntries);
+                ConfigureDefaultFontFallback(fontAsset);
                 AssetDatabase.CreateAsset(fontAsset, sdfAssetPath);
 
                 if (fontAsset.material != null)
@@ -1144,6 +1306,94 @@ namespace Wrj.FontAwesome
             }
 
             return retryRequired ? FontAssetCreationStatus.RetryRequired : FontAssetCreationStatus.Completed;
+        }
+
+        private static List<FontAwesomeIconEntry> LoadIconEntries(IconSetDefinition iconSet)
+        {
+            List<FontAwesomeIconEntry> iconEntries = new();
+            if (iconSet == null)
+            {
+                return iconEntries;
+            }
+
+            TextAsset iconMetadata = AssetDatabase.LoadAssetAtPath<TextAsset>(iconSet.IconsMetadataPath);
+            if (iconMetadata == null)
+            {
+                return iconEntries;
+            }
+
+            ParseIconMetadata(iconMetadata.text, iconEntries, iconSet);
+            return iconEntries;
+        }
+
+        private static bool PopulateFontAssetWithIcons(TMP_FontAsset fontAsset, IconSetDefinition iconSet, List<FontAwesomeIconEntry> iconEntries)
+        {
+            if (fontAsset == null || iconSet == null || iconEntries == null || iconEntries.Count == 0)
+            {
+                return false;
+            }
+
+            if (!iconSet.TryGetFamilyStyle(fontAsset, out string family, out string style))
+            {
+                return false;
+            }
+
+            List<uint> unicodes = GetUnicodesForFontStyle(iconEntries, family, style);
+            if (unicodes.Count == 0)
+            {
+                return false;
+            }
+
+            fontAsset.atlasPopulationMode = AtlasPopulationMode.Dynamic;
+            fontAsset.ClearFontAssetData(true);
+            fontAsset.TryAddCharacters(unicodes.ToArray(), out uint[] _);
+            fontAsset.atlasPopulationMode = AtlasPopulationMode.Static;
+            fontAsset.isMultiAtlasTexturesEnabled = false;
+            return true;
+        }
+
+        private static List<uint> GetUnicodesForFontStyle(List<FontAwesomeIconEntry> iconEntries, string family, string style)
+        {
+            HashSet<uint> unicodes = new();
+            foreach (FontAwesomeIconEntry icon in iconEntries)
+            {
+                if (!icon.Supports(family, style))
+                {
+                    continue;
+                }
+
+                unicodes.Add(icon.Unicode);
+
+                if (string.Equals(style, "duotone", StringComparison.OrdinalIgnoreCase) && icon.SecondaryUnicode.HasValue)
+                {
+                    unicodes.Add(icon.SecondaryUnicode.Value);
+                }
+            }
+
+            return unicodes.OrderBy(unicode => unicode).ToList();
+        }
+
+        private static bool ConfigureDefaultFontFallback(TMP_FontAsset fontAsset)
+        {
+            if (fontAsset == null)
+            {
+                return false;
+            }
+
+            TMP_FontAsset defaultFontAsset = TMP_Settings.defaultFontAsset;
+            if (defaultFontAsset == null || ReferenceEquals(defaultFontAsset, fontAsset))
+            {
+                return false;
+            }
+
+            fontAsset.fallbackFontAssetTable ??= new List<TMP_FontAsset>();
+            if (fontAsset.fallbackFontAssetTable.Contains(defaultFontAsset))
+            {
+                return false;
+            }
+
+            fontAsset.fallbackFontAssetTable.Add(defaultFontAsset);
+            return true;
         }
 
         private enum FontAssetCreationStatus
@@ -1271,6 +1521,341 @@ namespace Wrj.FontAwesome
                 fontAsset.TryAddCharacters(icon.Glyph, out string _);
                 EditorUtility.SetDirty(fontAsset);
             }
+        }
+
+        private void RefreshFontAssetsForActiveIconSet()
+        {
+            fontAssetsByStyle.Clear();
+
+            if (activeIconSet == null)
+            {
+                return;
+            }
+
+            string[] guids = AssetDatabase.FindAssets(activeIconSet.DefaultFontSearchFilter);
+            foreach (string guid in guids)
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                TMP_FontAsset fontAsset = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(assetPath);
+                if (fontAsset == null || !activeIconSet.MatchesFontAsset(fontAsset))
+                {
+                    continue;
+                }
+
+                if (!activeIconSet.TryGetFamilyStyle(fontAsset, out string family, out string style))
+                {
+                    continue;
+                }
+
+                string styleKey = ToStyleKey(family, style);
+                if (string.IsNullOrWhiteSpace(styleKey))
+                {
+                    continue;
+                }
+
+                if (!fontAssetsByStyle.TryGetValue(styleKey, out List<TMP_FontAsset> fontAssets))
+                {
+                    fontAssets = new List<TMP_FontAsset>();
+                    fontAssetsByStyle[styleKey] = fontAssets;
+                }
+
+                if (!fontAssets.Contains(fontAsset))
+                {
+                    fontAssets.Add(fontAsset);
+                }
+            }
+
+            foreach ((string _, List<TMP_FontAsset> fontAssets) in fontAssetsByStyle)
+            {
+                fontAssets.Sort((left, right) => string.Compare(left.name, right.name, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        private TMP_FontAsset ResolveFontAssetForIcon(FontAwesomeIconEntry icon, TMP_Text preferredTargetText = null, string preferredStyleKey = null)
+        {
+            if (activeIconSet == null)
+            {
+                return null;
+            }
+
+            if (preferredTargetText != null &&
+                preferredTargetText.font != null &&
+                activeIconSet.MatchesFontAsset(preferredTargetText.font) &&
+                activeIconSet.TryGetFamilyStyle(preferredTargetText.font, out string preferredFamily, out string preferredStyle) &&
+                IsStyleEnabled(ToStyleKey(preferredFamily, preferredStyle)) &&
+                icon.Supports(preferredFamily, preferredStyle))
+            {
+                return preferredTargetText.font;
+            }
+
+            if (!string.IsNullOrWhiteSpace(preferredStyleKey) &&
+                fontAssetsByStyle.TryGetValue(preferredStyleKey, out List<TMP_FontAsset> preferredStyleAssets))
+            {
+                foreach (TMP_FontAsset fontAsset in preferredStyleAssets)
+                {
+                    if (activeIconSet.TryGetFamilyStyle(fontAsset, out string family, out string style) &&
+                        icon.Supports(family, style))
+                    {
+                        return fontAsset;
+                    }
+                }
+            }
+
+            foreach (string styleKey in availableStyleKeys)
+            {
+                if (!IsStyleEnabled(styleKey) ||
+                    !fontAssetsByStyle.TryGetValue(styleKey, out List<TMP_FontAsset> fontAssets))
+                {
+                    continue;
+                }
+
+                foreach (TMP_FontAsset fontAsset in fontAssets)
+                {
+                    if (activeIconSet.TryGetFamilyStyle(fontAsset, out string family, out string style) &&
+                        icon.Supports(family, style))
+                    {
+                        return fontAsset;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private Font ResolvePreviewFont(FontAwesomeFilteredIconEntry filteredIcon, TMP_FontAsset previewFontAsset)
+        {
+            if (previewFontAsset != null && previewFontAsset.sourceFontFile != null)
+            {
+                return previewFontAsset.sourceFontFile;
+            }
+
+            Font fontFromSiblingAsset = ResolvePreviewFontFromSiblingAsset(previewFontAsset);
+            if (fontFromSiblingAsset != null)
+            {
+                return fontFromSiblingAsset;
+            }
+
+            if (activeIconSet == null)
+            {
+                return null;
+            }
+
+            foreach (string fontAssetPath in activeIconSet.GetFontSourceAssetPaths())
+            {
+                if (!TryInferStyleKeyFromName(fontAssetPath, out string styleKey) ||
+                    !string.Equals(styleKey, filteredIcon.StyleKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Font sourceFont = AssetDatabase.LoadAssetAtPath<Font>(fontAssetPath);
+                if (sourceFont != null)
+                {
+                    return sourceFont;
+                }
+            }
+
+            return null;
+        }
+
+        private static Font ResolvePreviewFontFromSiblingAsset(TMP_FontAsset fontAsset)
+        {
+            if (fontAsset == null)
+            {
+                return null;
+            }
+
+            string assetPath = AssetDatabase.GetAssetPath(fontAsset);
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                return null;
+            }
+
+            string basePath = assetPath.EndsWith(" SDF.asset", StringComparison.OrdinalIgnoreCase)
+                ? assetPath[..^" SDF.asset".Length]
+                : Path.ChangeExtension(assetPath, null);
+
+            Font otfFont = AssetDatabase.LoadAssetAtPath<Font>($"{basePath}.otf");
+            if (otfFont != null)
+            {
+                return otfFont;
+            }
+
+            return AssetDatabase.LoadAssetAtPath<Font>($"{basePath}.ttf");
+        }
+
+        private void SetAllStyleFilters(bool value)
+        {
+            foreach (string styleKey in availableStyleKeys)
+            {
+                styleFilterStates[styleKey] = value;
+            }
+
+            RebuildFilteredIcons();
+        }
+
+        private bool IsStyleEnabled(string styleKey)
+        {
+            return !string.IsNullOrWhiteSpace(styleKey) &&
+                   styleFilterStates.TryGetValue(styleKey, out bool isEnabled) &&
+                   isEnabled;
+        }
+
+        private string GetSdfSummaryForStyle(string styleKey)
+        {
+            if (!fontAssetsByStyle.TryGetValue(styleKey, out List<TMP_FontAsset> fontAssets) || fontAssets.Count == 0)
+            {
+                return "none found";
+            }
+
+            return string.Join(", ", fontAssets.Select(fontAsset => fontAsset.name));
+        }
+
+        private string GetEnabledStyleSdfSummary()
+        {
+            List<string> summaries = new();
+            foreach (string styleKey in availableStyleKeys)
+            {
+                if (!IsStyleEnabled(styleKey))
+                {
+                    continue;
+                }
+
+                summaries.Add($"{ToDisplayLabel(styleKey)}: {GetSdfSummaryForStyle(styleKey)}");
+            }
+
+            if (summaries.Count == 0)
+            {
+                return "No styles enabled.";
+            }
+
+            return string.Join("   |   ", summaries);
+        }
+
+        private string GetSdfSummaryForStyleKeys(IReadOnlyList<string> styleKeys)
+        {
+            List<string> summaries = new();
+            foreach (string styleKey in styleKeys)
+            {
+                string summary = $"{ToDisplayLabel(styleKey)}: {GetSdfSummaryForStyle(styleKey)}";
+                summaries.Add(summary);
+            }
+
+            return summaries.Count > 0 ? string.Join("\n", summaries) : "No associated SDFs";
+        }
+
+        private string GetSdfSummaryForIcon(FontAwesomeIconEntry icon)
+        {
+            List<string> matchingAssets = new();
+            foreach (string styleKey in icon.GetStyleKeys())
+            {
+                if (!IsStyleEnabled(styleKey) ||
+                    !fontAssetsByStyle.TryGetValue(styleKey, out List<TMP_FontAsset> fontAssets))
+                {
+                    continue;
+                }
+
+                foreach (TMP_FontAsset fontAsset in fontAssets)
+                {
+                    if (!matchingAssets.Contains(fontAsset.name))
+                    {
+                        matchingAssets.Add(fontAsset.name);
+                    }
+                }
+            }
+
+            if (matchingAssets.Count == 0)
+            {
+                return "No SDF";
+            }
+
+            return matchingAssets.Count == 1
+                ? matchingAssets[0]
+                : $"{matchingAssets[0]} +{matchingAssets.Count - 1}";
+        }
+
+        private static int GetStyleSortOrder(string styleKey)
+        {
+            return styleKey.ToLowerInvariant() switch
+            {
+                "solid" => 0,
+                "regular" => 1,
+                "light" => 2,
+                "thin" => 3,
+                "duotone" => 4,
+                "brands" => 5,
+                _ => 10
+            };
+        }
+
+        private static string ToDisplayLabel(string styleKey)
+        {
+            if (string.IsNullOrWhiteSpace(styleKey))
+            {
+                return "Unknown";
+            }
+
+            return styleKey.Equals("brands", StringComparison.OrdinalIgnoreCase)
+                ? "Brands"
+                : CultureInfo.InvariantCulture.TextInfo.ToTitleCase(styleKey.Replace('-', ' '));
+        }
+
+        private static string ToStyleKey(string family, string style)
+        {
+            if (string.Equals(family, "brands", StringComparison.OrdinalIgnoreCase))
+            {
+                return "brands";
+            }
+
+            return style?.Trim().ToLowerInvariant() ?? string.Empty;
+        }
+
+        private static bool TryInferStyleKeyFromName(string value, out string styleKey)
+        {
+            styleKey = string.Empty;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            string normalized = value.ToLowerInvariant();
+            if (normalized.Contains("brands"))
+            {
+                styleKey = "brands";
+                return true;
+            }
+
+            if (normalized.Contains("duotone"))
+            {
+                styleKey = "duotone";
+                return true;
+            }
+
+            if (normalized.Contains("solid"))
+            {
+                styleKey = "solid";
+                return true;
+            }
+
+            if (normalized.Contains("regular"))
+            {
+                styleKey = "regular";
+                return true;
+            }
+
+            if (normalized.Contains("light"))
+            {
+                styleKey = "light";
+                return true;
+            }
+
+            if (normalized.Contains("thin"))
+            {
+                styleKey = "thin";
+                return true;
+            }
+
+            return false;
         }
 
         private static void ParseIconMetadata(string json, List<FontAwesomeIconEntry> results, IconSetDefinition iconSet)
@@ -1529,6 +2114,18 @@ namespace Wrj.FontAwesome
                 .Replace("\\t", "\t");
         }
 
+        private readonly struct FontAwesomeFilteredIconEntry
+        {
+            public FontAwesomeFilteredIconEntry(FontAwesomeIconEntry icon, string styleKey)
+            {
+                Icon = icon;
+                StyleKey = styleKey;
+            }
+
+            public FontAwesomeIconEntry Icon { get; }
+            public string StyleKey { get; }
+        }
+
         private readonly struct FontAwesomeIconEntry
         {
             public FontAwesomeIconEntry(string name, string label, uint unicode, uint? secondaryUnicode, List<FontAwesomeFamilyStyle> freeFamilyStyles)
@@ -1551,6 +2148,40 @@ namespace Wrj.FontAwesome
             public bool IsValid => !string.IsNullOrWhiteSpace(Name);
             public bool HasSecondaryGlyph => SecondaryUnicode.HasValue;
             public bool SupportsDuotone => Supports("classic", "duotone");
+
+            public List<string> GetStyleKeys()
+            {
+                if (FreeFamilyStyles == null || FreeFamilyStyles.Count == 0)
+                {
+                    return new List<string>();
+                }
+
+                HashSet<string> styleKeys = new(StringComparer.OrdinalIgnoreCase);
+                foreach (FontAwesomeFamilyStyle familyStyle in FreeFamilyStyles)
+                {
+                    styleKeys.Add(ToStyleKey(familyStyle.Family, familyStyle.Style));
+                }
+
+                return styleKeys.OrderBy(GetStyleSortOrder).ThenBy(key => key, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+
+            public bool SupportsStyleKey(string styleKey)
+            {
+                if (FreeFamilyStyles == null || FreeFamilyStyles.Count == 0)
+                {
+                    return true;
+                }
+
+                foreach (FontAwesomeFamilyStyle familyStyle in FreeFamilyStyles)
+                {
+                    if (string.Equals(ToStyleKey(familyStyle.Family, familyStyle.Style), styleKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
 
             public bool Supports(string family, string style)
             {
@@ -1716,13 +2347,13 @@ namespace Wrj.FontAwesome
 
                 foreach (string fontAssetPath in sourceFontAssetPaths)
                 {
-                    if (AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(GetSdfAssetPath(fontAssetPath)) != null)
+                    if (AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(GetSdfAssetPath(fontAssetPath)) == null)
                     {
-                        return false;
+                        return true;
                     }
                 }
 
-                return true;
+                return false;
             }
 
             public virtual string GetFontAssetGenerationKey()
