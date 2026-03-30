@@ -40,6 +40,9 @@ Go to: `Edit → Project Settings → Package Manager
 ## What it does
 
 - Provides a searchable grid of Font Awesome icons from `icons.json`
+- Expands search results by enabled style, so the same icon can appear as separate `Solid`, `Regular`, `Light`, `Duotone`, or `Brands` entries
+- Uses compact style toggle filters instead of requiring a single selected Font Awesome SDF asset
+- Shows the associated SDF asset(s) for each enabled style in the browser
 - Lets you target an existing `TMP_Text` or create a new one
 - Supports both `TextMeshProUGUI` and world-space `TextMeshPro`
 - Automatically download and install the latest free licensed Font Awesome desktop package
@@ -59,18 +62,30 @@ Open:
 ## Basic workflow
 
 1. Open the icon browser.
-2. Assign the desired Font Awesome `TMP_FontAsset`
-3. Search for an icon by name and click it's icon in the grid.
+2. Confirm or override the Font Awesome `icons.json` metadata path if needed.
+3. Use the style filter buttons to enable the styles you want to browse.
+4. Search for an icon by name.
+5. Click the exact style result you want in the grid.
 
 The browser will:
 
 - reuse a pre-selected `TMP_Text` if one is selected
 - otherwise create a new TMP object
+- resolve the matching Font Awesome TMP SDF asset automatically based on the clicked style result
 
 New UI TextMeshPro objects are created with:
 
 - `Auto Size` enabled
 - `Font Size Max = 500`
+
+### Style filters
+
+The browser reads the style combinations declared in `icons.json` and exposes them as compact toggle buttons.
+
+- Icons remain visible if they match any enabled style
+- A search like `cubes` can therefore show separate `Solid`, `Regular`, `Light`, and `Duotone` entries at the same time
+- Each result tile represents a single icon-style combination
+- The browser preview attempts to resolve the matching source font automatically for the selected style
 
 ## Metadata setup
 
@@ -93,6 +108,8 @@ The installation:
 - cleans up temp files when done
 - generates TextMeshPro SDF assets from the installed files
 
+Generated Font Awesome SDF assets are configured with the project's default TMP font asset as a fallback so regular text can resolve through TMP fallback behavior when needed.
+
 Installed package content is intentionally trimmed to:
 
 - `metadata/`
@@ -101,7 +118,7 @@ Installed package content is intentionally trimmed to:
 
 ## Duotone icons
 
-When the selected font asset is detected as a duotone font, the browser manages a layered glyph behavior automatically behind the scenes.
+When you click a duotone result, the browser manages a layered glyph behavior automatically behind the scenes.
 
 For duotone icons it:
 
@@ -127,6 +144,15 @@ Color sync behavior is slightly smarter:
 
 ![Duotone Color Sync](Documentation/images/\DuoToneColorMgmt.gif)
 
+## Notes and expectations
+
+- Font Awesome support depends on the metadata you point at and the matching TMP SDF assets present in the project.
+- Free and Pro packages expose different icon/style sets.
+- Duotone support works best when the selected metadata and generated font assets come from the same Font Awesome package/version.
+- Search results are style-specific. If multiple styles are enabled, the same icon name can appear more than once.
+- Newly generated Font Awesome SDF assets are created from the package OTF files and then reused by the browser automatically.
+- Existing SDF assets are not force-regenerated automatically; if you want to recreate them from scratch, delete the old SDF assets and let the browser generate them again.
+
 ## Package contents
 
 | Path | Purpose |
@@ -139,8 +165,8 @@ Color sync behavior is slightly smarter:
 ### Single icon
 
 - Select an existing `TextMeshProUGUI`
-- Pick a Font Awesome font asset
-- Click an icon
+- Enable the style you want
+- Click the matching icon result
 
 The selected TMP object is updated in place.
 
@@ -153,7 +179,7 @@ The browser creates a new `TextMeshProUGUI` object with the icon already assigne
 
 ### Duotone icon
 
-- Pick a duotone Font Awesome TMP font asset
+- Enable `Duotone`
 - Click a duotone-capable icon
 
 The browser creates:
