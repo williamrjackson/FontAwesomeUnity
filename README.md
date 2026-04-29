@@ -60,7 +60,8 @@ Open:
 
 1. Open the icon browser.
 2. Assign the desired Font Awesome `TMP_FontAsset`
-3. Search for an icon by name and click it's icon in the grid.
+3. Search for an icon by name.
+4. Double-click the icon in the grid to apply it.
 
 The browser will:
 
@@ -71,6 +72,66 @@ New UI TextMeshPro objects are created with:
 
 - `Auto Size` enabled
 - `Font Size Max = 500`
+
+## Inline tokens
+
+`FontAwesomeInlineText` lets you embed Font Awesome icons inside ordinary TMP text that uses another primary font asset, such as `Liberation Sans SDF`.
+
+Example:
+
+```text
+<b>Font Awesome</b>
+<size=350><color=#FDF0D5>:fa-classic fa-regular fa-unity:</color></size>
+<i>& Unity</i>
+```
+<img src="Documentation/images/InlineExample.png" alt="InlineExample" width="50%">
+
+The component supports:
+
+- simple tokens like `:fa-github:`
+- selector-aware tokens like `:fa-duotone fa-light fa-axe:`
+- automatic fallback font setup for discovered Font Awesome TMP assets
+- automatic creation of duotone secondary layers for supported inline duotone icons
+
+
+When you paste text containing `:fa-...:` into a TMP component in the editor, the package can automatically add `FontAwesomeInlineText` so the token starts rendering as an icon.
+
+## Searching across Font Awesome font assets
+
+The browser search can work in two modes:
+
+- normal mode searches within the currently selected Font Awesome TMP font asset
+- `Search Across All Font Awesome Styles/SDFs` searches across compatible Font Awesome TMP assets in the project
+
+Broad search is useful when you want to find an icon in another family or style without manually switching the selected SDF first.
+
+The browser search matches:
+
+- icon name
+- label
+- Font Awesome `search.terms` metadata
+
+## Browsing style variants in search results
+
+When `Search Across All Font Awesome Styles/SDFs` is enabled, the browser groups matching variants into a single tile per icon instead of showing every style as a separate result.
+
+If an icon has multiple matching variants, the tile shows left/right buttons so you can page through the available families and styles on demand.
+
+
+<img src="Documentation/images/StyleVariants.gif" alt="StyleVariants" width="35%">
+
+The active variant controls:
+
+- the preview shown in the grid
+- `Copy Inline Token`
+- double-click placement from the browser
+
+This makes it easy to explore combinations like:
+
+- `classic`
+- `duotone`
+- `sharp`
+- `sharp-duotone`
 
 ## Metadata setup
 
@@ -133,6 +194,7 @@ Color sync behavior is slightly smarter:
 |---|---|
 | `Editor/FontAwesomeIconBrowserWindow.cs` | The editor browser window and install/setup workflow. |
 | `Runtime/FontAwesomeDuotoneSync.cs` | Runtime/edit-mode helper that keeps duotone secondary layers synced to the primary text object. |
+| `Runtime/FontAwesomeInlineText.cs` | Runtime/editor helper that turns inline `:fa-...:` tokens in TMP text into Font Awesome icons, including style-aware font selection and duotone support. |
 
 ## Typical usage examples
 
@@ -140,21 +202,21 @@ Color sync behavior is slightly smarter:
 
 - Select an existing `TextMeshProUGUI`
 - Pick a Font Awesome font asset
-- Click an icon
+- Double-click an icon
 
 The selected TMP object is updated in place.
 
 ### New UI icon
 
 - Select a GameObject within a UI `Canvas` hierarchy
-- Click an icon
+- Double-click an icon
 
 The browser creates a new `TextMeshProUGUI` object with the icon already assigned.
 
 ### Duotone icon
 
 - Pick a duotone Font Awesome TMP font asset
-- Click a duotone-capable icon
+- Double-click a duotone-capable icon
 
 The browser creates:
 
