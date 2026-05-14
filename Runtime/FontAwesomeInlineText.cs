@@ -124,21 +124,27 @@ namespace Wrj.FontAwesome
         private void Reset()
         {
             CacheTargetText();
+            #if UNITY_EDITOR
             AutoConfigureDefaults();
+            #endif
             ApplyConfiguration();
         }
 
         private void OnEnable()
         {
             CacheTargetText();
+            #if UNITY_EDITOR
             AutoConfigureDefaults();
+            #endif
             ApplyConfiguration();
         }
 
         private void OnValidate()
         {
             CacheTargetText();
+            #if UNITY_EDITOR
             AutoConfigureDefaults();
+            #endif
             ApplyConfiguration();
         }
 
