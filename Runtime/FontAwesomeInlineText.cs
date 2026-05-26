@@ -1525,6 +1525,10 @@ namespace Wrj.FontAwesome
                 availableIconFontAssets.Add(asset);
             }
         }
+#else
+        private void AutoConfigureDefaults()
+        {
+        }
 #endif
 
         private readonly struct InlineTokenSpec
