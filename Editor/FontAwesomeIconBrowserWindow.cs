@@ -10,6 +10,8 @@ using TMPro;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Networking;
+using UnityEngine.TextCore;
+using UnityEngine.TextCore.LowLevel;
 
 namespace Wrj.FontAwesome
 {
@@ -18,17 +20,25 @@ namespace Wrj.FontAwesome
         private const string WindowTitle = "Font Awesome Icon Browser";
         private const float TileWidth = 92f;
         private const float TileHeight = 96f;
+        private const float GridRowSpacing = 2f;
+        private const int GridOverscanRows = 1;
         private const string SecondaryLayerObjectName = "FA Secondary Layer";
         private const int FontAssetGenerationRetryCount = 10;
 
         private const string JsonStringPropertyPattern = "\"{0}\"\\s*:\\s*\"(?<value>(?:\\\\.|[^\"\\\\])*)\"";
         private const string JsonFamilyStylePattern = "\"family\"\\s*:\\s*\"(?<family>(?:\\\\.|[^\"\\\\])*)\"\\s*,\\s*\"style\"\\s*:\\s*\"(?<style>(?:\\\\.|[^\"\\\\])*)\"";
+        private static readonly System.Reflection.PropertyInfo GuiClipVisibleRectProperty =
+            typeof(GUI).Assembly.GetType("UnityEngine.GUIClip")?.GetProperty(
+                "visibleRect",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
 
         private readonly List<FontAwesomeIconEntry> allIcons = new();
         private readonly List<BrowserIconGroup> filteredIcons = new();
         private readonly Dictionary<string, int> selectedVariantIndices = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<IconSetDefinition> iconSetDefinitions = new();
         private readonly HashSet<string> pendingAutoFontAssetGeneration = new();
+        private readonly Dictionary<Font, TMP_FontAsset> previewFontAssets = new();
+        private readonly List<FontVariantDescriptor> compatibleSearchFontDescriptors = new();
 
         private TMP_FontAsset selectedFontAsset;
         private IconSetDefinition activeIconSet;
@@ -40,6 +50,7 @@ namespace Wrj.FontAwesome
         private bool iconsLoaded;
         private bool duotoneMode;
         private bool searchAcrossAllFontAssets = true;
+        private bool compatibleSearchFontDescriptorsValid;
 
         [MenuItem("Tools/Font Awesome Icon Browser...")]
         private static void OpenWindow()
@@ -52,6 +63,8 @@ namespace Wrj.FontAwesome
 
         private void OnEnable()
         {
+            EditorApplication.projectChanged -= OnProjectChanged;
+            EditorApplication.projectChanged += OnProjectChanged;
             EnsureIconSetDefinitions();
             EnsureFontAssetsForConfiguredMetadata();
             EnsureDefaultFontAsset();
@@ -59,6 +72,27 @@ namespace Wrj.FontAwesome
             duotoneMode = IsSelectedFontDuotone();
             EnsureIconsLoaded();
             RebuildFilteredIcons();
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.projectChanged -= OnProjectChanged;
+
+            foreach (TMP_FontAsset previewFontAsset in previewFontAssets.Values)
+            {
+                if (previewFontAsset != null)
+                {
+                    DestroyImmediate(previewFontAsset);
+                }
+            }
+
+            previewFontAssets.Clear();
+            InvalidateCompatibleSearchFontDescriptors();
+        }
+
+        private void OnProjectChanged()
+        {
+            InvalidateCompatibleSearchFontDescriptors();
         }
 
         private void OnGUI()
@@ -232,10 +266,24 @@ namespace Wrj.FontAwesome
             float width = Mathf.Max(position.width - 24f, TileWidth);
             int columns = Mathf.Max(1, Mathf.FloorToInt(width / TileWidth));
             int rows = Mathf.CeilToInt(filteredIcons.Count / (float)columns);
+            float rowHeight = TileHeight + GridRowSpacing;
+            int firstVisibleRow = Mathf.Clamp(
+                Mathf.FloorToInt(scrollPosition.y / rowHeight) - GridOverscanRows,
+                0,
+                Mathf.Max(0, rows - 1));
+            int visibleRowCount = Mathf.CeilToInt(position.height / rowHeight) + GridOverscanRows * 2;
+            int lastVisibleRow = Mathf.Min(rows, firstVisibleRow + visibleRowCount);
 
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
-            for (int row = 0; row < rows; row++)
+            if (firstVisibleRow > 0)
+            {
+                GUILayout.Space(firstVisibleRow * rowHeight);
+            }
+
+            PrepareVisiblePreviewGlyphs(firstVisibleRow, lastVisibleRow, columns);
+
+            for (int row = firstVisibleRow; row < lastVisibleRow; row++)
             {
                 EditorGUILayout.BeginHorizontal();
 
@@ -254,7 +302,106 @@ namespace Wrj.FontAwesome
                 EditorGUILayout.EndHorizontal();
             }
 
+            int remainingRows = rows - lastVisibleRow;
+            if (remainingRows > 0)
+            {
+                GUILayout.Space(remainingRows * rowHeight);
+            }
+
             EditorGUILayout.EndScrollView();
+        }
+
+        private void PrepareVisiblePreviewGlyphs(int firstRow, int lastRow, int columns)
+        {
+            if (Event.current.type != EventType.Repaint)
+            {
+                return;
+            }
+
+            Dictionary<TMP_FontAsset, HashSet<uint>> glyphsByPreviewFont = new();
+            int firstIndex = firstRow * columns;
+            int lastIndex = Mathf.Min(filteredIcons.Count, lastRow * columns);
+            for (int index = firstIndex; index < lastIndex; index++)
+            {
+                BrowserIconResult result = filteredIcons[index].GetActiveResult();
+                TMP_FontAsset fontAsset = result.PreviewFontAsset != null ? result.PreviewFontAsset : selectedFontAsset;
+                AddTransientPreviewGlyph(glyphsByPreviewFont, fontAsset, result.Icon.Unicode);
+
+                if (ShouldRenderAsDuotone(result.Icon, fontAsset) &&
+                    TryGetSecondaryUnicodeForFont(result.Icon, fontAsset, out uint secondaryUnicode))
+                {
+                    AddTransientPreviewGlyph(glyphsByPreviewFont, fontAsset, secondaryUnicode);
+                }
+            }
+
+            foreach (KeyValuePair<TMP_FontAsset, HashSet<uint>> entry in glyphsByPreviewFont)
+            {
+                entry.Key.TryAddCharacters(entry.Value.ToArray(), out uint[] _);
+            }
+        }
+
+        private void AddTransientPreviewGlyph(Dictionary<TMP_FontAsset, HashSet<uint>> glyphsByPreviewFont, TMP_FontAsset fontAsset, uint unicode)
+        {
+            TMP_FontAsset previewFontAsset = GetOrCreatePreviewFontAsset(fontAsset);
+            if (previewFontAsset == null || !SourceFontSupportsGlyph(fontAsset, unicode))
+            {
+                return;
+            }
+
+            if (!glyphsByPreviewFont.TryGetValue(previewFontAsset, out HashSet<uint> unicodes))
+            {
+                unicodes = new HashSet<uint>();
+                glyphsByPreviewFont.Add(previewFontAsset, unicodes);
+            }
+
+            unicodes.Add(unicode);
+        }
+
+        private TMP_FontAsset GetOrCreatePreviewFontAsset(TMP_FontAsset fontAsset)
+        {
+            Font sourceFont = fontAsset != null ? fontAsset.sourceFontFile : null;
+            if (sourceFont == null)
+            {
+                return null;
+            }
+
+            if (previewFontAssets.TryGetValue(sourceFont, out TMP_FontAsset previewFontAsset) && previewFontAsset != null)
+            {
+                return previewFontAsset;
+            }
+
+            previewFontAsset = TMP_FontAsset.CreateFontAsset(
+                sourceFont,
+                48,
+                5,
+                GlyphRenderMode.SDFAA,
+                2048,
+                2048,
+                AtlasPopulationMode.Dynamic,
+                true);
+
+            if (previewFontAsset == null)
+            {
+                return null;
+            }
+
+            previewFontAsset.name = $"{sourceFont.name} Browser Preview";
+            previewFontAsset.hideFlags = HideFlags.HideAndDontSave;
+            if (previewFontAsset.material != null)
+            {
+                previewFontAsset.material.hideFlags = HideFlags.HideAndDontSave;
+            }
+
+            foreach (Texture2D atlasTexture in previewFontAsset.atlasTextures)
+            {
+                if (atlasTexture != null)
+                {
+                    atlasTexture.hideFlags = HideFlags.HideAndDontSave;
+                }
+            }
+
+            previewFontAssets.Add(sourceFont, previewFontAsset);
+            return previewFontAsset;
         }
 
         private void DrawIconButton(BrowserIconGroup group)
@@ -266,11 +413,8 @@ namespace Wrj.FontAwesome
             GUI.Box(tileRect, GUIContent.none);
             Rect buttonRect = new(tileRect.x + 4f, tileRect.y + 4f, tileRect.width - 8f, tileRect.height - 8f);
             string tooltip = BuildIconTooltip(result);
-            bool glyphAvailable = FontHasGlyph(previewFontAsset, icon.Unicode);
+            bool glyphAvailable = SourceFontSupportsGlyph(previewFontAsset, icon.Unicode);
             Event currentEvent = Event.current;
-            Font previewFont = previewFontAsset != null ? previewFontAsset.sourceFontFile : null;
-            GUIStyle glyphStyle = new(iconGlyphStyle) { font = previewFont };
-            GUIStyle secondaryGlyphStyle = new(secondaryIconGlyphStyle) { font = previewFont };
 
             Color previousColor = GUI.color;
             if (!glyphAvailable)
@@ -300,17 +444,17 @@ namespace Wrj.FontAwesome
             Rect glyphRect = new(buttonRect.x, buttonRect.y + 2f, buttonRect.width, 34f);
             if (ShouldRenderAsDuotone(icon, previewFontAsset))
             {
-                GUI.Label(glyphRect, icon.Glyph, glyphStyle);
+                DrawTransientPreviewGlyph(glyphRect, previewFontAsset, icon.Unicode, iconGlyphStyle.normal.textColor);
 
                 if (TryGetSecondaryUnicodeForFont(icon, previewFontAsset, out uint secondaryUnicode) &&
-                    (icon.SecondaryUnicode.HasValue || CanPreviewGlyphInFont(previewFontAsset, secondaryUnicode)))
+                    SourceFontSupportsGlyph(previewFontAsset, secondaryUnicode))
                 {
-                    GUI.Label(glyphRect, char.ConvertFromUtf32((int)secondaryUnicode), secondaryGlyphStyle);
+                    DrawTransientPreviewGlyph(glyphRect, previewFontAsset, secondaryUnicode, secondaryIconGlyphStyle.normal.textColor);
                 }
             }
             else
             {
-                GUI.Label(glyphRect, icon.Glyph, glyphStyle);
+                DrawTransientPreviewGlyph(glyphRect, previewFontAsset, icon.Unicode, iconGlyphStyle.normal.textColor);
             }
 
             Rect nameRect = new(buttonRect.x + 2f, buttonRect.y + 38f, buttonRect.width - 4f, 16f);
@@ -325,6 +469,90 @@ namespace Wrj.FontAwesome
             }
 
             GUI.color = previousColor;
+        }
+
+        private void DrawTransientPreviewGlyph(Rect containerRect, TMP_FontAsset sourceAsset, uint unicode, Color color)
+        {
+            if (Event.current.type != EventType.Repaint)
+            {
+                return;
+            }
+
+            TMP_FontAsset previewFontAsset = GetOrCreatePreviewFontAsset(sourceAsset);
+            if (previewFontAsset == null ||
+                previewFontAsset.characterLookupTable == null ||
+                !previewFontAsset.characterLookupTable.TryGetValue(unicode, out TMP_Character character) ||
+                character?.glyph == null)
+            {
+                return;
+            }
+
+            Glyph glyph = character.glyph;
+            if (glyph.atlasIndex < 0 || glyph.atlasIndex >= previewFontAsset.atlasTextures.Length)
+            {
+                return;
+            }
+
+            Texture2D atlasTexture = previewFontAsset.atlasTextures[glyph.atlasIndex];
+            Material material = previewFontAsset.material;
+            GlyphRect atlasRect = glyph.glyphRect;
+            if (atlasTexture == null || material == null || atlasRect.width <= 0 || atlasRect.height <= 0)
+            {
+                return;
+            }
+
+            float aspect = atlasRect.width / (float)atlasRect.height;
+            float height = Mathf.Min(containerRect.height, containerRect.width / aspect);
+            float width = height * aspect;
+            Rect destinationRect = new(
+                containerRect.x + (containerRect.width - width) * 0.5f,
+                containerRect.y + (containerRect.height - height) * 0.5f,
+                width,
+                height);
+            Rect sourceRect = new(
+                atlasRect.x / (float)atlasTexture.width,
+                atlasRect.y / (float)atlasTexture.height,
+                atlasRect.width / (float)atlasTexture.width,
+                atlasRect.height / (float)atlasTexture.height);
+
+            if (!ClipPreviewTextureToCurrentGuiClip(ref destinationRect, ref sourceRect))
+            {
+                return;
+            }
+
+            color.a *= GUI.color.a;
+            Graphics.DrawTexture(destinationRect, atlasTexture, sourceRect, 0, 0, 0, 0, color, material);
+        }
+
+        private static bool ClipPreviewTextureToCurrentGuiClip(ref Rect destinationRect, ref Rect sourceRect)
+        {
+            if (GuiClipVisibleRectProperty?.GetValue(null) is not Rect clipRect)
+            {
+                return true;
+            }
+
+            Rect originalDestination = destinationRect;
+            float clippedXMin = Mathf.Max(originalDestination.xMin, clipRect.xMin);
+            float clippedXMax = Mathf.Min(originalDestination.xMax, clipRect.xMax);
+            float clippedYMin = Mathf.Max(originalDestination.yMin, clipRect.yMin);
+            float clippedYMax = Mathf.Min(originalDestination.yMax, clipRect.yMax);
+            if (clippedXMax <= clippedXMin || clippedYMax <= clippedYMin)
+            {
+                return false;
+            }
+
+            float leftFraction = (clippedXMin - originalDestination.xMin) / originalDestination.width;
+            float rightFraction = (originalDestination.xMax - clippedXMax) / originalDestination.width;
+            float topFraction = (clippedYMin - originalDestination.yMin) / originalDestination.height;
+            float bottomFraction = (originalDestination.yMax - clippedYMax) / originalDestination.height;
+
+            sourceRect = new Rect(
+                sourceRect.x + sourceRect.width * leftFraction,
+                sourceRect.y + sourceRect.height * bottomFraction,
+                sourceRect.width * (1f - leftFraction - rightFraction),
+                sourceRect.height * (1f - topFraction - bottomFraction));
+            destinationRect = Rect.MinMaxRect(clippedXMin, clippedYMin, clippedXMax, clippedYMax);
+            return true;
         }
 
         private void DrawVariantControls(Rect buttonRect, BrowserIconGroup group)
@@ -560,8 +788,8 @@ namespace Wrj.FontAwesome
             string query = (searchText ?? string.Empty).Trim();
             bool hasQuery = !string.IsNullOrWhiteSpace(query);
             bool broadenSearchScope = hasQuery && searchAcrossAllFontAssets;
-            List<TMP_FontAsset> searchableFontAssets = broadenSearchScope
-                ? GetCompatibleSearchFontAssets()
+            List<FontVariantDescriptor> searchableFontAssets = broadenSearchScope
+                ? GetCompatibleSearchFontDescriptors()
                 : null;
 
             foreach (FontAwesomeIconEntry icon in allIcons)
@@ -606,14 +834,21 @@ namespace Wrj.FontAwesome
             Repaint();
         }
 
-        private List<TMP_FontAsset> GetCompatibleSearchFontAssets()
+        private List<FontVariantDescriptor> GetCompatibleSearchFontDescriptors()
         {
-            List<TMP_FontAsset> results = new();
-            if (activeIconSet == null)
+            if (compatibleSearchFontDescriptorsValid)
             {
-                return results;
+                return compatibleSearchFontDescriptors;
             }
 
+            compatibleSearchFontDescriptors.Clear();
+            if (activeIconSet == null)
+            {
+                compatibleSearchFontDescriptorsValid = true;
+                return compatibleSearchFontDescriptors;
+            }
+
+            HashSet<int> seenFontAssetIds = new();
             string[] guids = AssetDatabase.FindAssets("t:TMP_FontAsset");
             foreach (string guid in guids)
             {
@@ -621,18 +856,31 @@ namespace Wrj.FontAwesome
                 TMP_FontAsset fontAsset = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(path);
                 if (fontAsset == null ||
                     !activeIconSet.MatchesFontAsset(fontAsset) ||
-                    results.Contains(fontAsset))
+                    !seenFontAssetIds.Add(fontAsset.GetInstanceID()) ||
+                    !activeIconSet.TryGetFamilyStyle(fontAsset, out string family, out string style))
                 {
                     continue;
                 }
 
-                results.Add(fontAsset);
+                compatibleSearchFontDescriptors.Add(new FontVariantDescriptor(
+                    fontAsset,
+                    fontAsset.sourceFontFile,
+                    family,
+                    style,
+                    path));
             }
 
-            return results;
+            compatibleSearchFontDescriptorsValid = true;
+            return compatibleSearchFontDescriptors;
         }
 
-        private List<BrowserIconResult> ResolveCompatibleSearchResults(FontAwesomeIconEntry icon, List<TMP_FontAsset> candidateFontAssets)
+        private void InvalidateCompatibleSearchFontDescriptors()
+        {
+            compatibleSearchFontDescriptorsValid = false;
+            compatibleSearchFontDescriptors.Clear();
+        }
+
+        private List<BrowserIconResult> ResolveCompatibleSearchResults(FontAwesomeIconEntry icon, List<FontVariantDescriptor> candidateFontAssets)
         {
             List<BrowserIconResult> results = new();
             if (icon.IsValid == false)
@@ -646,24 +894,22 @@ namespace Wrj.FontAwesome
             }
 
             HashSet<string> seenVariants = new(StringComparer.OrdinalIgnoreCase);
-            foreach (TMP_FontAsset fontAsset in candidateFontAssets)
+            foreach (FontVariantDescriptor descriptor in candidateFontAssets)
             {
-                if (fontAsset == null ||
-                    !activeIconSet.TryGetFamilyStyle(fontAsset, out string family, out string style) ||
-                    !icon.Supports(family, style))
+                if (!descriptor.IsValid || !icon.Supports(descriptor.Family, descriptor.Style))
                 {
                     continue;
                 }
 
-                if (FontHasGlyph(fontAsset, icon.Unicode) || FontSourceHasGlyph(fontAsset, icon.Unicode))
+                if (FontAssetContainsGlyph(descriptor.FontAsset, icon.Unicode) || SourceFontSupportsGlyph(descriptor.SourceFont, icon.Unicode))
                 {
-                    string variantKey = $"{family}|{style}|{AssetDatabase.GetAssetPath(fontAsset)}";
+                    string variantKey = $"{descriptor.Family}|{descriptor.Style}|{descriptor.AssetPath}";
                     if (!seenVariants.Add(variantKey))
                     {
                         continue;
                     }
 
-                    results.Add(new BrowserIconResult(icon, fontAsset, family, style));
+                    results.Add(new BrowserIconResult(icon, descriptor.FontAsset, descriptor.Family, descriptor.Style));
                 }
             }
 
@@ -736,7 +982,7 @@ namespace Wrj.FontAwesome
             bool shouldRenameObject = createdNewObject || ShouldRenameAutoNamedObject(targetText);
 
             Undo.RecordObject(targetText, "Assign Font Awesome Icon");
-            EnsureGlyphAvailable(targetFontAsset, icon);
+            EnsureGlyphCachedForText(targetFontAsset, icon);
             targetText.font = targetFontAsset;
             targetText.text = icon.Glyph;
             DisableDuotoneSync(targetText);
@@ -791,7 +1037,7 @@ namespace Wrj.FontAwesome
                 bool shouldRenamePrimaryOnlyObject = createdNewObject || ShouldRenameAutoNamedObject(primaryText);
 
                 Undo.RecordObject(primaryText, "Assign Font Awesome Icon");
-                EnsureGlyphAvailable(targetFontAsset, icon);
+                EnsureGlyphCachedForText(targetFontAsset, icon);
                 primaryText.font = targetFontAsset;
                 primaryText.text = icon.Glyph;
                 DisableDuotoneSync(primaryText);
@@ -815,8 +1061,8 @@ namespace Wrj.FontAwesome
 
             bool shouldRenameObject = createdNewObject || ShouldRenameAutoNamedObject(primaryText);
 
-            EnsureGlyphAvailable(targetFontAsset, icon);
-            EnsureGlyphAvailable(targetFontAsset, secondaryUnicode);
+            EnsureGlyphCachedForText(targetFontAsset, icon);
+            EnsureGlyphCachedForText(targetFontAsset, secondaryUnicode);
 
             Undo.RecordObject(primaryText, "Assign Font Awesome Duotone Icon");
             Undo.RecordObject(secondaryText, "Assign Font Awesome Duotone Icon");
@@ -841,9 +1087,9 @@ namespace Wrj.FontAwesome
             EditorGUIUtility.PingObject(primaryText.gameObject);
         }
 
-        private void EnsureGlyphAvailable(TMP_FontAsset selectedFontAsset, uint value)
+        private void EnsureGlyphCachedForText(TMP_FontAsset selectedFontAsset, uint value)
         {
-            if (selectedFontAsset == null || FontHasGlyph(selectedFontAsset, value))
+            if (selectedFontAsset == null || FontAssetContainsGlyph(selectedFontAsset, value))
             {
                 return;
             }
@@ -1050,7 +1296,7 @@ namespace Wrj.FontAwesome
                 return true;
             }
 
-            if (!CanInspectGlyphInFont(selectedFontAsset, icon.Unicode))
+            if (!FontCanSupplyGlyph(selectedFontAsset, icon.Unicode))
             {
                 return false;
             }
@@ -1089,10 +1335,10 @@ namespace Wrj.FontAwesome
             uint syntheticSecondaryUnicode = 0x100000u + icon.Unicode;
             if (allowDynamicLoad)
             {
-                EnsureGlyphAvailable(fontAsset, syntheticSecondaryUnicode);
+                EnsureGlyphCachedForText(fontAsset, syntheticSecondaryUnicode);
             }
 
-            if (!FontHasGlyph(fontAsset, syntheticSecondaryUnicode))
+            if (!FontAssetContainsGlyph(fontAsset, syntheticSecondaryUnicode))
             {
                 return false;
             }
@@ -1101,40 +1347,14 @@ namespace Wrj.FontAwesome
             return true;
         }
 
-        private bool CanRenderGlyphInSelectedFont(uint unicode)
-        {
-            return CanRenderGlyphInFont(selectedFontAsset, unicode);
-        }
-
-        private bool CanInspectGlyphInFont(TMP_FontAsset fontAsset, uint unicode)
+        private bool FontCanSupplyGlyph(TMP_FontAsset fontAsset, uint unicode)
         {
             if (fontAsset == null)
             {
                 return true;
             }
 
-            return FontHasGlyph(fontAsset, unicode) || FontSourceHasGlyph(fontAsset, unicode);
-        }
-
-        private bool CanRenderGlyphInFont(TMP_FontAsset fontAsset, uint unicode)
-        {
-            if (CanInspectGlyphInFont(fontAsset, unicode))
-            {
-                return true;
-            }
-
-            EnsureGlyphAvailable(fontAsset, unicode);
-            return FontHasGlyph(fontAsset, unicode);
-        }
-
-        private bool CanPreviewGlyphInFont(TMP_FontAsset fontAsset, uint unicode)
-        {
-            if (fontAsset == null)
-            {
-                return false;
-            }
-
-            return FontHasGlyph(fontAsset, unicode);
+            return FontAssetContainsGlyph(fontAsset, unicode) || SourceFontSupportsGlyph(fontAsset, unicode);
         }
 
         private bool IsFontAssetDuotone(TMP_FontAsset fontAsset)
@@ -1259,6 +1479,7 @@ namespace Wrj.FontAwesome
             if (!ReferenceEquals(activeIconSet, matchedIconSet))
             {
                 activeIconSet = matchedIconSet;
+                InvalidateCompatibleSearchFontDescriptors();
                 iconsLoaded = false;
                 allIcons.Clear();
                 filteredIcons.Clear();
@@ -1632,16 +1853,20 @@ namespace Wrj.FontAwesome
 #endif
         }
 
-        private static bool FontHasGlyph(TMP_FontAsset fontAsset, uint unicode)
+        private static bool FontAssetContainsGlyph(TMP_FontAsset fontAsset, uint unicode)
         {
             return fontAsset != null &&
                    fontAsset.characterLookupTable != null &&
                    fontAsset.characterLookupTable.ContainsKey(unicode);
         }
 
-        private static bool FontSourceHasGlyph(TMP_FontAsset fontAsset, uint unicode)
+        private static bool SourceFontSupportsGlyph(TMP_FontAsset fontAsset, uint unicode)
         {
-            Font sourceFont = fontAsset?.sourceFontFile;
+            return SourceFontSupportsGlyph(fontAsset?.sourceFontFile, unicode);
+        }
+
+        private static bool SourceFontSupportsGlyph(Font sourceFont, uint unicode)
+        {
             if (sourceFont == null)
             {
                 return false;
@@ -1662,9 +1887,9 @@ namespace Wrj.FontAwesome
             return result is bool hasCharacter && hasCharacter;
         }
 
-        private static void EnsureGlyphAvailable(TMP_FontAsset fontAsset, FontAwesomeIconEntry icon)
+        private static void EnsureGlyphCachedForText(TMP_FontAsset fontAsset, FontAwesomeIconEntry icon)
         {
-            if (fontAsset == null || FontHasGlyph(fontAsset, icon.Unicode))
+            if (fontAsset == null || FontAssetContainsGlyph(fontAsset, icon.Unicode))
             {
                 return;
             }
@@ -2203,6 +2428,25 @@ namespace Wrj.FontAwesome
             public string PreviewFamily { get; }
             public string PreviewStyle { get; }
             public bool IsValid => Icon.IsValid;
+        }
+
+        private readonly struct FontVariantDescriptor
+        {
+            public FontVariantDescriptor(TMP_FontAsset fontAsset, Font sourceFont, string family, string style, string assetPath)
+            {
+                FontAsset = fontAsset;
+                SourceFont = sourceFont;
+                Family = family ?? string.Empty;
+                Style = style ?? string.Empty;
+                AssetPath = assetPath ?? string.Empty;
+            }
+
+            public TMP_FontAsset FontAsset { get; }
+            public Font SourceFont { get; }
+            public string Family { get; }
+            public string Style { get; }
+            public string AssetPath { get; }
+            public bool IsValid => FontAsset != null && !string.IsNullOrWhiteSpace(Family) && !string.IsNullOrWhiteSpace(Style);
         }
 
         private sealed class BrowserIconGroup
